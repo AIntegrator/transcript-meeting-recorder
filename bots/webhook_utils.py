@@ -11,10 +11,20 @@ logger = logging.getLogger(__name__)
 def trigger_webhook(webhook_trigger_type, bot, payload):
     """
     Trigger a webhook for a given event.
+    Prioritizes bot-level webhook subscriptions over project-level ones.
     """
     from bots.models import WebhookDeliveryAttempt
 
-    subscriptions = bot.project.webhook_subscriptions.filter(triggers__contains=[webhook_trigger_type], is_active=True)
+    # If bot has any bot-level webhook subscriptions, use those exclusively
+    if bot.bot_webhook_subscriptions.exists():
+        subscriptions = bot.bot_webhook_subscriptions.filter(triggers__contains=[webhook_trigger_type], is_active=True)
+    else:
+        # Otherwise, fall back to project-level webhook subscriptions
+        subscriptions = bot.project.webhook_subscriptions.filter(
+            bot__isnull=True,  # Only project-level (not bot-specific)
+            triggers__contains=[webhook_trigger_type],
+            is_active=True,
+        )
 
     delivery_attempts = []
     for subscription in subscriptions:
@@ -40,7 +50,7 @@ def sign_payload(payload, secret):
     Sign a webhook payload using HMAC-SHA256. Returns a base64-encoded HMAC-SHA256 signature
     """
     # Convert the payload to a canonical JSON string
-    payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    payload_json = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 
     # Create the signature
     signature = hmac.new(secret, payload_json.encode("utf-8"), hashlib.sha256).digest()

@@ -3,10 +3,10 @@ import io
 import cv2
 import numpy as np
 from pydub import AudioSegment
+from tldextract import tldextract
 
 from .models import (
     MeetingTypes,
-    RecordingStates,
     TranscriptionProviders,
 )
 
@@ -17,16 +17,18 @@ def pcm_to_mp3(
     channels: int = 1,
     sample_width: int = 2,
     bitrate: str = "128k",
+    output_sample_rate: int = None,
 ) -> bytes:
     """
     Convert PCM audio data to MP3 format.
 
     Args:
         pcm_data (bytes): Raw PCM audio data
-        sample_rate (int): Sample rate in Hz (default: 32000)
+        sample_rate (int): Input sample rate in Hz (default: 32000)
         channels (int): Number of audio channels (default: 1)
         sample_width (int): Sample width in bytes (default: 2)
         bitrate (str): MP3 encoding bitrate (default: "128k")
+        output_sample_rate (int): Output sample rate in Hz (default: None, uses input sample_rate)
 
     Returns:
         bytes: MP3 encoded audio data
@@ -38,6 +40,10 @@ def pcm_to_mp3(
         frame_rate=sample_rate,
         channels=channels,
     )
+
+    # Resample to different sample rate if specified
+    if output_sample_rate is not None and output_sample_rate != sample_rate:
+        audio_segment = audio_segment.set_frame_rate(output_sample_rate)
 
     # Create a bytes buffer to store the MP3 data
     buffer = io.BytesIO()
@@ -312,6 +318,21 @@ def generate_aggregated_utterances(recording):
     return aggregated_utterances
 
 
+def generate_failed_utterance_json_for_bot_detail_view(recording):
+    failed_utterances = recording.utterances.filter(failure_data__isnull=False).order_by("timestamp_ms")[:10]
+
+    failed_utterances_data = []
+
+    for utterance in failed_utterances:
+        utterance_data = {
+            "id": utterance.id,
+            "failure_data": utterance.failure_data,
+        }
+        failed_utterances_data.append(utterance_data)
+
+    return failed_utterances_data
+
+
 def generate_utterance_json_for_bot_detail_view(recording):
     utterances_data = []
     recording_first_buffer_timestamp_ms = recording.first_buffer_timestamp_ms
@@ -331,8 +352,8 @@ def generate_utterance_json_for_bot_detail_view(recording):
 
             relative_timestamp_ms = utterance.timestamp_ms - recording_first_buffer_timestamp_ms + first_word_start_relative_ms
         else:
-            # If we don't have a first buffer timestamp, we use the absolute timestamp
-            relative_timestamp_ms = utterance.timestamp_ms
+            # If we don't have a first buffer timestamp, we don't have a relative timestamp
+            relative_timestamp_ms = None
 
         relative_words_data = []
         if utterance.transcription.get("words"):
@@ -371,9 +392,10 @@ def generate_utterance_json_for_bot_detail_view(recording):
                     }
                 )
 
-        timestamp_ms = relative_timestamp_ms if recording_first_buffer_timestamp_ms is not None else utterance.timestamp_ms
-        seconds = timestamp_ms // 1000
-        timestamp_display = f"{seconds // 60}:{seconds % 60:02d}"
+        timestamp_display = None
+        if relative_timestamp_ms is not None:
+            seconds = relative_timestamp_ms // 1000
+            timestamp_display = f"{seconds // 60}:{seconds % 60:02d}"
 
         utterance_data = {
             "id": utterance.id,
@@ -388,19 +410,34 @@ def generate_utterance_json_for_bot_detail_view(recording):
     return utterances_data
 
 
+def root_domain_from_url(url):
+    if not url:
+        return None
+    return tldextract.extract(url).registered_domain
+
+
+def domain_and_subdomain_from_url(url):
+    if not url:
+        return None
+    extract_from_url = tldextract.extract(url)
+    return extract_from_url.subdomain + "." + extract_from_url.registered_domain
+
+
 def meeting_type_from_url(url):
     if not url:
         return None
 
-    if "zoom.us" in url:
+    root_domain = root_domain_from_url(url)
+    domain_and_subdomain = domain_and_subdomain_from_url(url)
+
+    if root_domain == "zoom.us":
         return MeetingTypes.ZOOM
-    elif "meet.google.com" in url:
+    elif domain_and_subdomain == "meet.google.com":
         return MeetingTypes.GOOGLE_MEET
-    elif "teams.microsoft.com" in url or "teams.live.com" in url:
+    elif domain_and_subdomain == "teams.microsoft.com" or domain_and_subdomain == "teams.live.com":
         return MeetingTypes.TEAMS
     else:
         return None
-
 
 def transcription_provider_from_meeting_url_and_transcription_settings(url, settings):
     if "deepgram" in settings:
@@ -417,18 +454,41 @@ def transcription_provider_from_meeting_url_and_transcription_settings(url, sett
         return TranscriptionProviders.DEEPGRAM
     return TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM
 
+def transcription_provider_from_bot_creation_data(data):
+    url = data.get("meeting_url")
+    settings = data.get("transcription_settings", {})
+    use_zoom_web_adapter = data.get("zoom_settings", {}).get("sdk") == "web"
+
+    if "deepgram" in settings:
+        return TranscriptionProviders.DEEPGRAM
+    elif "gladia" in settings:
+        return TranscriptionProviders.GLADIA
+    elif "openai" in settings:
+        return TranscriptionProviders.OPENAI
+    elif "assembly_ai" in settings:
+        return TranscriptionProviders.ASSEMBLY_AI
+    elif "sarvam" in settings:
+        return TranscriptionProviders.SARVAM
+    elif "meeting_closed_captions" in settings:
+        return TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM
+
+    # Return default provider. Which is deepgram for Zoom, and meeting_closed_captions for Google Meet / Teams
+    if meeting_type_from_url(url) == MeetingTypes.ZOOM and not use_zoom_web_adapter:
+        return TranscriptionProviders.DEEPGRAM
+    return TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM
+
 
 def generate_recordings_json_for_bot_detail_view(bot):
     # Process recordings and utterances
     recordings_data = []
     for recording in bot.recordings.all():
-        if recording.state != RecordingStates.COMPLETE:
-            continue
         recordings_data.append(
             {
                 "state": recording.state,
+                "transcription_state": recording.transcription_state,
                 "url": recording.url,
                 "utterances": generate_utterance_json_for_bot_detail_view(recording),
+                "failed_utterances": generate_failed_utterance_json_for_bot_detail_view(recording),
             }
         )
 

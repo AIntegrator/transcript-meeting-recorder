@@ -1,3 +1,33 @@
+function sendChatMessage(text) {
+    
+    // First try to find the chat input textarea
+    let chatInput = document.querySelector('textarea[aria-label="Send a message"]');
+    
+    if (!chatInput) {
+        console.error('Chat input not found');
+        return false;
+    }
+    
+    // Type the message
+    chatInput.focus();
+    chatInput.value = text;
+    
+    // Trigger input event to ensure the UI updates
+    chatInput.dispatchEvent(new Event('input', { bubbles: true }));
+    
+    // Send Enter keypress to submit the message
+    const enterEvent = new KeyboardEvent('keydown', {
+        key: 'Enter',
+        code: 'Enter',
+        keyCode: 13,
+        which: 13,
+        bubbles: true
+    });
+    chatInput.dispatchEvent(enterEvent);
+    
+    return true;
+}
+
 class StyleManager {
     constructor() {
         this.videoTrackIdToSSRC = new Map();
@@ -6,9 +36,10 @@ class StyleManager {
 
         this.audioContext = null;
         this.audioTracks = [];
-        this.silenceThreshold = 0.0;
+        this.silenceThreshold = 0.5;
         this.silenceCheckInterval = null;
         this.memoryUsageCheckInterval = null;
+        this.neededInteractionsInterval = null;
     }
 
     addAudioTrack(audioTrack) {
@@ -32,6 +63,7 @@ class StyleManager {
         if (averageDeviation > this.silenceThreshold) {
             window.ws.sendJson({
                 type: 'SilenceStatus',
+                volume: averageDeviation,
                 isSilent: false
             });
         }
@@ -47,6 +79,45 @@ class StyleManager {
                 usedJSHeapSize: performance.memory?.usedJSHeapSize
             }
         });
+    }
+
+    checkNeededInteractions() {
+        // Check for recording notification dialog
+        const recordingDialog = document.querySelector('div[aria-modal="true"][role="dialog"]');
+        
+        if (recordingDialog && recordingDialog.textContent.includes('This video call is being recorded')) {           
+            // Find and click the "Join now" button (usually the confirm/OK button)
+            const joinNowButton = recordingDialog.querySelector('button[data-mdc-dialog-action="ok"]');
+            
+            if (joinNowButton) {
+                try {
+                    joinNowButton.click();
+                    window.ws.sendJson({
+                        type: 'UiInteraction',
+                        message: 'Automatically accepted recording notification'
+                    });
+                } catch (error) {
+                    window.ws.sendJson({
+                        type: 'Error',
+                        message: 'Error clicking button to accept recording notification'
+                    });
+                }                
+            } else {                
+                window.ws.sendJson({
+                    type: 'Error',
+                    message: 'Found recording dialog but could not find button to accept recording notification'
+                });
+            }
+        }
+
+        // Check if bot has been removed from the meeting
+        const removedFromMeetingElement = document.querySelector('.roSPhc');
+        if (removedFromMeetingElement && (removedFromMeetingElement.textContent.includes('You\'ve been removed from the meeting') || removedFromMeetingElement.textContent.includes('Your host ended the meeting for everyone'))) {
+            window.ws.sendJson({
+                type: 'MeetingStatusChange',
+                change: 'removed_from_meeting'
+            });
+        }
     }
 
     startSilenceDetection() {
@@ -68,7 +139,7 @@ class StyleManager {
  
          // Create analyzer and connect it to the destination
          this.analyser = this.audioContext.createAnalyser();
-         this.analyser.fftSize = 256;
+         this.analyser.fftSize = 8192;
          const bufferLength = this.analyser.frequencyBinCount;
          this.audioDataArray = new Uint8Array(bufferLength);
  
@@ -78,6 +149,11 @@ class StyleManager {
  
          this.mixedAudioTrack = destination.stream.getAudioTracks()[0];
 
+        // Process and send mixed audio if enabled
+        if (window.initialData.sendMixedAudio && this.mixedAudioTrack) {
+            this.processMixedAudioTrack();
+        }
+
         // Clear any existing interval
         if (this.silenceCheckInterval) {
             clearInterval(this.silenceCheckInterval);
@@ -85,6 +161,10 @@ class StyleManager {
 
         if (this.memoryUsageCheckInterval) {
             clearInterval(this.memoryUsageCheckInterval);
+        }
+
+        if (this.neededInteractionsInterval) {
+            clearInterval(this.neededInteractionsInterval);
         }
                 
         // Check for audio activity every second
@@ -96,8 +176,105 @@ class StyleManager {
         this.memoryUsageCheckInterval = setInterval(() => {
             this.checkMemoryUsage();
         }, 60000);
+
+        // Check for needed interactions every 5 seconds
+        this.neededInteractionsInterval = setInterval(() => {
+            this.checkNeededInteractions();
+        }, 5000);
     }
     
+    async processMixedAudioTrack() {
+        try {
+            // Create processor to get raw audio frames from the mixed audio track
+            const processor = new MediaStreamTrackProcessor({ track: this.mixedAudioTrack });
+            const generator = new MediaStreamTrackGenerator({ kind: 'audio' });
+            
+            // Get readable stream of audio frames
+            const readable = processor.readable;
+            const writable = generator.writable;
+
+            // Transform stream to intercept and send audio frames
+            const transformStream = new TransformStream({
+                async transform(frame, controller) {
+                    if (!frame) {
+                        return;
+                    }
+
+                    try {
+                        // Check if controller is still active
+                        if (controller.desiredSize === null) {
+                            frame.close();
+                            return;
+                        }
+
+                        // Copy the audio data
+                        const numChannels = frame.numberOfChannels;
+                        const numSamples = frame.numberOfFrames;
+                        const audioData = new Float32Array(numSamples);
+                        
+                        // Copy data from each channel
+                        // If multi-channel, average all channels together to create mono output
+                        if (numChannels > 1) {
+                            // Temporary buffer to hold each channel's data
+                            const channelData = new Float32Array(numSamples);
+                            
+                            // Sum all channels
+                            for (let channel = 0; channel < numChannels; channel++) {
+                                frame.copyTo(channelData, { planeIndex: channel });
+                                for (let i = 0; i < numSamples; i++) {
+                                    audioData[i] += channelData[i];
+                                }
+                            }
+                            
+                            // Average by dividing by number of channels
+                            for (let i = 0; i < numSamples; i++) {
+                                audioData[i] /= numChannels;
+                            }
+                        } else {
+                            // If already mono, just copy the data
+                            frame.copyTo(audioData, { planeIndex: 0 });
+                        }
+
+                        // Send mixed audio data via websocket
+                        const timestamp = performance.now();
+                        window.ws.sendMixedAudio(timestamp, audioData);
+                        
+                        // Pass through the original frame
+                        controller.enqueue(frame);
+                    } catch (error) {
+                        console.error('Error processing mixed audio frame:', error);
+                        frame.close();
+                    }
+                },
+                flush() {
+                    console.log('Mixed audio transform stream flush called');
+                }
+            });
+
+            // Create an abort controller for cleanup
+            const abortController = new AbortController();
+
+            try {
+                // Connect the streams
+                await readable
+                    .pipeThrough(transformStream)
+                    .pipeTo(writable, {
+                        signal: abortController.signal
+                    })
+                    .catch(error => {
+                        if (error.name !== 'AbortError') {
+                            console.error('Mixed audio pipeline error:', error);
+                        }
+                    });
+            } catch (error) {
+                console.error('Mixed audio stream pipeline error:', error);
+                abortController.abort();
+            }
+
+        } catch (error) {
+            console.error('Error setting up mixed audio processor:', error);
+        }
+    }
 
     stop() {
         this.showAllOfGMeetUI();
@@ -229,6 +406,12 @@ class StyleManager {
                 }
                 // Add the missing click action
                 unpinButton.click();
+
+                window.ws.sendJson({
+                    type: 'UiInteraction',
+                    message: 'Unpinned pinned video',
+                    participantListItemDom: participantListItem.outerHTML
+                });
             }, 200);
         }
     }
@@ -262,11 +445,52 @@ class StyleManager {
         }
     }
 
+    async openChatPanel() {
+        const chatButton = document.querySelector('button[aria-label="Chat with everyone"]');
+        if (chatButton) {
+            // Click to open the chat panel
+            chatButton.click();
+
+            // Wait for the chat input element to appear
+            const numAttempts = 30;
+            for (let i = 0; i < numAttempts; i++) {
+                // Sleep for 100 milliseconds
+                await new Promise(resolve => setTimeout(resolve, 100));
+                const chatInput = document.querySelector('textarea[aria-label="Send a message"]');
+                if (chatInput) {
+                    break;
+                }
+                const wasLastAttempt = i === numAttempts - 1;
+                if (wasLastAttempt) {
+                    console.log('Failed to find chat input after', numAttempts, 'attempts');
+                    window.ws.sendJson({
+                        type: 'Error',
+                        message: 'Failed to find chat input in openChatPanel'
+                    });
+                    return;
+                }
+            }
+
+            // Click the chat button again to close/minimize the panel
+            chatButton.click();
+
+            window.ws.sendJson({
+                type: 'ChatStatusChange',
+                change: 'ready_to_send'
+            });
+        }
+    }
+
     async start() {
         if (window.initialData.recordingView === 'gallery_view')
         {
             await this.openParticipantList();
+
+            // Sleep for half a second to let the panel close, so that opening the chat panel will work
+            await new Promise(resolve => setTimeout(resolve, 500));
         }
+
+        await this.openChatPanel();
 
         this.onlyShowSubsetofGMeetUI();
         
@@ -386,12 +610,38 @@ const DEVICE_OUTPUT_TYPE = {
     VIDEO: 2
 }
 
+// Chat message manager
+class ChatMessageManager {
+    constructor(ws) {
+        this.ws = ws;
+    }
+
+    handleChatMessage(chatMessageRaw) {
+        try {
+            const chatMessage = chatMessageRaw.chatMessage;
+            console.log('handleChatMessage', chatMessage);
+
+            this.ws.sendJson({
+                type: 'ChatMessage',
+                message_uuid: chatMessage.messageId,
+                participant_uuid: chatMessage.deviceId,
+                timestamp: Math.floor(chatMessage.timestamp / 1000),
+                text: chatMessage.chatMessageContent.text,
+            });
+        }
+        catch (error) {
+            console.error('Error in handleChatMessage', error);
+        }
+    }
+}
+
 // User manager
 class UserManager {
     constructor(ws) {
         this.allUsersMap = new Map();
         this.currentUsersMap = new Map();
         this.deviceOutputMap = new Map();
+        this.currentUserId = null;
 
         this.ws = ws;
     }
@@ -483,9 +733,15 @@ class UserManager {
                 7: 'removed_from_meeting'
             }
 
+            const { isCurrentUserString, ...userWithoutIsCurrentUserString } = user;
+            if (isCurrentUserString && this.currentUserId === null) {
+                this.currentUserId = user.deviceId;
+            }
+
             return {
-                ...user,
-                humanized_status: userStatusMap[user.status] || "unknown"
+                ...userWithoutIsCurrentUserString,
+                humanized_status: userStatusMap[user.status] || "unknown",
+                isCurrentUser: user.deviceId === this.currentUserId
             }
         })
         // Get the current user IDs before updating
@@ -506,7 +762,8 @@ class UserManager {
                 profile: user.profile,
                 status: user.status,
                 humanized_status: user.humanized_status,
-                parentDeviceId: user.parentDeviceId
+                parentDeviceId: user.parentDeviceId,
+                isCurrentUser: user.isCurrentUser
             });
         }
 
@@ -526,7 +783,8 @@ class UserManager {
                 profilePicture: user.profilePicture,
                 status: user.status,
                 humanized_status: user.humanized_status,
-                parentDeviceId: user.parentDeviceId
+                parentDeviceId: user.parentDeviceId,
+                isCurrentUser: user.isCurrentUser
             });
         }
 
@@ -627,7 +885,7 @@ class WebSocketClient {
   We no longer need this because we're not using MediaStreamTrackProcessor's
   getBlackFrame() {
     // Create black frame data (I420 format)
-    const width = 1920, height = 1080;
+    const width = window.initialData.videoFrameWidth, height = window.initialData.videoFrameHeight;
     const yPlaneSize = width * height;
     const uvPlaneSize = (width * height) / 4;
 
@@ -813,33 +1071,26 @@ class WebSocketClient {
     }
   }
 
-  sendMixedAudio(timestamp, streamId, audioData) {
+  sendMixedAudio(timestamp, audioData) {
       if (this.ws.readyState !== WebSocket.OPEN) {
           console.error('WebSocket is not connected for audio send', this.ws.readyState);
           return;
       }
-
 
       if (!this.mediaSendingEnabled) {
         return;
       }
 
       try {
-          // Create final message: type (4 bytes) + timestamp (8 bytes) + audio data
-          const message = new Uint8Array(4 + 8 + 4 + audioData.buffer.byteLength);
+          // Create final message: type (4 bytes) + audio data
+          const message = new Uint8Array(4 + audioData.buffer.byteLength);
           const dataView = new DataView(message.buffer);
           
           // Set message type (3 for AUDIO)
           dataView.setInt32(0, WebSocketClient.MESSAGE_TYPES.AUDIO, true);
           
-          // Set timestamp as BigInt64
-          dataView.setBigInt64(4, BigInt(timestamp), true);
-
-          // Set streamId length and bytes
-          dataView.setInt32(12, streamId, true);
-
-          // Copy audio data after type and timestamp
-          message.set(new Uint8Array(audioData.buffer), 16);
+          // Copy audio data after type
+          message.set(new Uint8Array(audioData.buffer), 4);
           
           // Send the binary message
           this.ws.send(message.buffer);
@@ -1045,6 +1296,7 @@ const messageTypes = [
             { name: 'fullName', fieldNumber: 2, type: 'string' },
             { name: 'profilePicture', fieldNumber: 3, type: 'string' },
             { name: 'status', fieldNumber: 4, type: 'varint' }, // in meeting = 1 vs not in meeting = 6. kicked out = 7?
+            { name: 'isCurrentUserString', fieldNumber: 7, type: 'string' }, // Presence of this string indicates that this is the current user. The string itself seems to be a random uuid
             { name: 'displayName', fieldNumber: 29, type: 'string' },
             { name: 'parentDeviceId', fieldNumber: 21, type: 'string' } // if this is present, then this is a screenshare device. The parentDevice is the person that is sharing
         ]
@@ -1061,6 +1313,7 @@ const messageTypes = [
             { name: 'deviceId', fieldNumber: 1, type: 'string' },
             { name: 'captionId', fieldNumber: 2, type: 'int64' },
             { name: 'version', fieldNumber: 3, type: 'int64' },
+            { name: 'isFinal', fieldNumber: 4, type: 'varint' },
             { name: 'text', fieldNumber: 6, type: 'string' },
             { name: 'languageId', fieldNumber: 8, type: 'int64' }
         ]
@@ -1148,6 +1401,7 @@ const captionManager = new CaptionManager(ws);
 const videoTrackManager = new VideoTrackManager(ws);
 const styleManager = new StyleManager();
 const receiverManager = new ReceiverManager();
+const chatMessageManager = new ChatMessageManager(ws);
 let rtpReceiverInterceptor = null;
 if (window.initialData.sendPerParticipantAudio) {
     rtpReceiverInterceptor = new RTCRtpReceiverInterceptor((receiver, result, ...args) => {
@@ -1159,6 +1413,8 @@ window.videoTrackManager = videoTrackManager;
 window.userManager = userManager;
 window.styleManager = styleManager;
 window.receiverManager = receiverManager;
+window.chatMessageManager = chatMessageManager;
+window.sendChatMessage = sendChatMessage;
 // Create decoders for all message types
 const messageDecoders = {};
 messageTypes.forEach(type => {
@@ -1205,7 +1461,9 @@ const handleCollectionEvent = (event) => {
 
   const chatMessageWrapper = collectionEvent.body.userInfoListWrapperAndChatWrapperWrapper?.userInfoListWrapperAndChatWrapper?.chatMessageWrapper;
   if (chatMessageWrapper) {
-    console.log('chatMessageWrapper', chatMessageWrapper);
+    for (const chatMessage of chatMessageWrapper) {
+        window.chatMessageManager?.handleChatMessage(chatMessage);
+    }
   }
 
   //console.log('deviceOutputInfoList', JSON.stringify(collectionEvent.body.userInfoListWrapperAndChatWrapperWrapper?.deviceInfoWrapper?.deviceOutputInfoList));
@@ -1445,18 +1703,29 @@ const handleAudioTrack = async (event) => {
                 }
 
                 const contributingSources = receiverManager.getContributingSources(receiver);
-                const usersForContributingSources = contributingSources.map(source => userManager.getUserByStreamId(source.source.toString())).filter(x => x);
+
+                const usersForContributingSourcesWithAudioLevel = contributingSources.map(source => {
+                    return {
+                        audioLevel: source?.audioLevel || 0, 
+                        user: userManager.getUserByStreamId(source.source.toString())
+                    }
+                }).filter(x => x.user).sort((a, b) => b.audioLevel - a.audioLevel);
+
+                const userForContributingSourceWithLoudestAudio = usersForContributingSourcesWithAudioLevel[0]?.user;
+
+
                 //console.log('contributingSources', contributingSources);
                 //console.log('deviceOutputMap', userManager.deviceOutputMap);
                 //console.log('usersForContributingSources', usersForContributingSources);
 
                 // Send audio data through websocket
-                if (usersForContributingSources.length === 1) {
-                    const firstUserId = usersForContributingSources[0]?.deviceId;
+                if (userForContributingSourceWithLoudestAudio) {
+                    const firstUserId = userForContributingSourceWithLoudestAudio?.deviceId;
                     if (firstUserId) {
                         ws.sendPerParticipantAudio(firstUserId, audioData);
                     }
                 }
+                
                 // Pass through the original frame
                 controller.enqueue(frame);
             } catch (error) {
@@ -1752,18 +2021,92 @@ class BotOutputManager {
         
         // For outputting video
         this.botOutputVideoElement = null;
-        this.videoSource = null;
+        this.videoSoundSource = null;
         this.botOutputVideoElementCaptureStream = null;
 
         // For outputting image
         this.botOutputCanvasElement = null;
         this.botOutputCanvasElementCaptureStream = null;
+        this.lastImageBytes = null;
         
         // For outputting audio
         this.audioContextForBotOutput = null;
         this.gainNode = null;
         this.destination = null;
         this.botOutputAudioTrack = null;
+    }
+
+    connectVideoSourceToAudioContext() {
+        if (this.botOutputVideoElement && this.audioContextForBotOutput && !this.videoSoundSource) {
+            this.videoSoundSource = this.audioContextForBotOutput.createMediaElementSource(this.botOutputVideoElement);
+            this.videoSoundSource.connect(this.gainNode);
+        }
+    }
+
+    playVideo(videoUrl) {
+        // If camera or mic are on, turn them off
+        turnOffMicAndCamera();
+
+        this.addBotOutputVideoElement(videoUrl);
+
+        // Add event listener to wait until the video starts playing
+        this.botOutputVideoElement.addEventListener('playing', () => {
+            console.log("Video has started playing, turning on mic and camera");
+
+            this.botOutputVideoElementCaptureStream = this.botOutputVideoElement.captureStream();
+
+            turnOnMicAndCamera();
+        }, { once: true });
+    }
+
+    isVideoPlaying() {
+        return !!this.botOutputVideoElement;
+    }
+
+    addBotOutputVideoElement(url) {
+        // Disconnect previous video source if it exists
+        if (this.videoSoundSource) {
+            this.videoSoundSource.disconnect();
+            this.videoSoundSource = null;
+        }
+    
+        // Remove any existing video element
+        if (this.botOutputVideoElement) {
+            this.botOutputVideoElement.remove();
+        }
+    
+        // Create new video element
+        this.botOutputVideoElement = document.createElement('video');
+        this.botOutputVideoElement.style.display = 'none';
+        this.botOutputVideoElement.src = url;
+        this.botOutputVideoElement.crossOrigin = 'anonymous';
+        this.botOutputVideoElement.loop = false;
+        this.botOutputVideoElement.autoplay = true;
+        this.botOutputVideoElement.muted = false;
+        // Clean up when video ends
+        this.botOutputVideoElement.addEventListener('ended', () => {
+            turnOffMicAndCamera();
+            if (this.videoSoundSource) {
+                this.videoSoundSource.disconnect();
+                this.videoSoundSource = null;
+            }
+            this.botOutputVideoElement.remove();
+            this.botOutputVideoElement = null;
+            this.botOutputVideoElementCaptureStream = null;
+
+            // If we were displaying an image, turn the camera back on
+            if (this.botOutputCanvasElementCaptureStream) {
+                this.botOutputCanvasElementCaptureStream = null;
+                // Resend last image in 1 second
+                if (this.lastImageBytes) {
+                    setTimeout(() => {
+                        this.displayImage(this.lastImageBytes);
+                    }, 1000);
+                }
+            }
+        });
+    
+        document.body.appendChild(this.botOutputVideoElement);
     }
 
     displayImage(imageBytes) {
@@ -1779,6 +2122,7 @@ class BotOutputManager {
                 }
 
                 // Now that the image is loaded, capture the stream and turn on camera
+                this.lastImageBytes = imageBytes;
                 this.botOutputCanvasElementCaptureStream = this.botOutputCanvasElement.captureStream(1);
                 await turnOnCamera();
             })
@@ -2030,19 +2374,18 @@ navigator.mediaDevices.getUserMedia = function(constraints) {
   
         // Create a new MediaStream to return
         const newStream = new MediaStream();
-  
-        // Video sending not supported yet
-        /* 
-        if (constraints.video && botOutputVideoElementCaptureStream) {
-            console.log("Adding video track", botOutputVideoElementCaptureStream.getVideoTracks()[0]);
-            newStream.addTrack(botOutputVideoElementCaptureStream.getVideoTracks()[0]);
+          
+        if (constraints.video && botOutputManager.botOutputVideoElementCaptureStream) {
+            console.log("Adding video track", botOutputManager.botOutputVideoElementCaptureStream.getVideoTracks()[0]);
+            newStream.addTrack(botOutputManager.botOutputVideoElementCaptureStream.getVideoTracks()[0]);
         }
-        */
-
-        if (constraints.video && botOutputManager.botOutputCanvasElementCaptureStream) {
-            console.log("Adding canvas track", botOutputManager.botOutputCanvasElementCaptureStream.getVideoTracks()[0]);
-            newStream.addTrack(botOutputManager.botOutputCanvasElementCaptureStream.getVideoTracks()[0]);
-        }
+        // Video is prioritized over canvas
+        else {
+            if (constraints.video && botOutputManager.botOutputCanvasElementCaptureStream) {
+                console.log("Adding canvas track", botOutputManager.botOutputCanvasElementCaptureStream.getVideoTracks()[0]);
+                newStream.addTrack(botOutputManager.botOutputCanvasElementCaptureStream.getVideoTracks()[0]);
+            }
+         }
 
         // Audio sending not supported yet
         
@@ -2053,12 +2396,9 @@ navigator.mediaDevices.getUserMedia = function(constraints) {
         }  
 
         // Video sending not supported yet
-        /*
-        if (botOutputVideoElement && audioContextForBotOutput && !videoSource) {
-            videoSource = audioContextForBotOutput.createMediaElementSource(botOutputVideoElement);
-            videoSource.connect(gainNode);
+        if (botOutputManager.botOutputVideoElementCaptureStream) {
+            botOutputManager.connectVideoSourceToAudioContext();
         }
-        */
   
         return newStream;
       })
