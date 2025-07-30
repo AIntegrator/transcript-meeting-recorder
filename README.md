@@ -9,7 +9,7 @@ The meeting recorder is a clone of the open source repository 'attendee' by Noah
 - Build the Docker image: `docker compose -f dev.docker-compose.yml build` (Takes about 5 minutes)
 - Create local environment variables: `docker compose -f dev.docker-compose.yml run --rm recorder-api python init_env.py > .env`
 - Edit the `.env` file and enter your AWS information.
-- Start all the services: `docker compose -f dev.docker-compose.yaml up`
+- Start all the services: `docker compose -f dev.docker-compose.yml up`
 - After the services have started, run migrations in a separate terminal tab: `docker compose -f dev.docker-compose.yaml exec attendee-app-local python manage.py migrate`
 - Go to localhost:8001 in your browser and create an account
 - The confirmation link will be written to the server logs in the terminal where you ran `docker compose -f dev.docker-compose.yml up`. Should look like `http://localhost:8001/accounts/confirm-email/<key>/`.
