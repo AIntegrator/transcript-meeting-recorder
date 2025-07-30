@@ -87,11 +87,11 @@ class BotPodCreator:
                         ),
                         env_from=[
                             # environment variables for the bot
-                            client.V1EnvFromSource(
-                                config_map_ref=client.V1ConfigMapEnvSource(
-                                    name="env"
-                                )
-                            ),
+                            #client.V1EnvFromSource(
+                            #    config_map_ref=client.V1ConfigMapEnvSource(
+                            #        name="env"
+                            #    )
+                            #),
                             client.V1EnvFromSource(
                                 secret_ref=client.V1SecretEnvSource(
                                     name= os.getenv("K8S_SECRETS", "app-secrets")
@@ -109,7 +109,7 @@ class BotPodCreator:
                 restart_policy="Never",
                 image_pull_secrets=[
                     client.V1LocalObjectReference(
-                        name="regcred"
+                        name=os.getenv("K8S_DOCKER_SECRETS", "app-secrets")
                     )
                 ],
                 termination_grace_period_seconds=60,
