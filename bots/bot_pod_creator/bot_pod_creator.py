@@ -51,6 +51,7 @@ class BotPodCreator:
         # Run entrypoint script first, then the bot command
         bot_cmd = f"python manage.py run_bot --botid {bot_id}"
         command = ["/bin/bash", "-c", f"/opt/bin/entrypoint.sh && {bot_cmd}"]
+        #command = ["/bin/bash", "-c", "/opt/bin/entrypoint.sh && sleep infinity"] For debugging purposes because with 'sleep infinity' pod doesn't die
 
         # Metadata labels matching the deployment
         labels = {
