@@ -16,10 +16,17 @@ The meeting recorder is a clone of the open source repository 'attendee' by Noah
 - Paste the link into your browser to confirm your account.
 - You should now be able to log in, input your credentials and obtain an API key. API calls should be directed to http://localhost:8000.
 
+## Running in dev mode with skaffold
+
+- Install skaffold: `brew install skaffold`
+- Install Docker Desktop: https://www.docker.com/products/docker-desktop
+- Start Docker Desktop with Kubernetes enabled and ensure you are in the desktop context: `kubectl config current-context`
+- Run skaffold in dev mode: `skaffold dev
+
 ## Deployment
 
-- Build the Docker image: `docker build --platform=linux/amd64 -t vanyabrucker/transcript:transcript-meeting-recorder_1.0.1_staging -f Dockerfile .` (Takes about 5 minutes)
-- Push the image to Docker Hub: `docker push vanyabrucker/transcript:transcript-meeting-recorder_1.0.1_staging`
+- Build the Docker image: `docker build --platform=linux/amd64 -t vanyabrucker/transcript-meeting-recorder:1.0.3_staging -f Dockerfile.dev .` (Takes about 5 minutes)
+- Push the image to Docker Hub: `docker push vanyabrucker/transcript-meeting-recorder:1.0.3_staging`
 
 
 ## Calling the API
