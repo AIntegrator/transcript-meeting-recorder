@@ -18,6 +18,7 @@ manifests:
   rawYaml:
     - k8s/deployment-dev.yaml
     - k8s/secret-transcript.yaml
+    - k8s/role-bot.yaml
 deploy:
   kubectl: {}
 #portForward:
