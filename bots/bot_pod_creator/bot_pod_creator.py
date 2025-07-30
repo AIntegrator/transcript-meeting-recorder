@@ -7,7 +7,7 @@ from kubernetes import client, config
 # fmt: off
 
 class BotPodCreator:
-    def __init__(self, namespace: str = "attendee"):
+    def __init__(self, namespace: str = os.getenv('CUBER_NAMESPACE', "attendee")):
         try:
             config.load_incluster_config()
         except config.ConfigException:
@@ -94,7 +94,12 @@ class BotPodCreator:
                             ),
                             client.V1EnvFromSource(
                                 secret_ref=client.V1SecretEnvSource(
-                                    name="app-secrets"
+                                    name= os.getenv("K8S_SECRETS", "app-secrets")
+                                )
+                            ),
+                            client.V1EnvFromSource(
+                                secret_ref=client.V1SecretEnvSource(
+                                    name=os.getenv("K8S_DOCKER_SECRETS", "app-secrets")
                                 )
                             )
                         ],
