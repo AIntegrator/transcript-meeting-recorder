@@ -39,7 +39,7 @@ spec:
         - name: BOT_POD_IMAGE
           value:  vanyabrucker/transcript-meeting-recorder
         - name: CUBER_RELEASE_VERSION
-          value: "1.0.2_staging"
+          value: "1.0.3_staging"
         - name: CUBER_NAMESPACE
           value: "default"
         envFrom:
