@@ -29,6 +29,19 @@ spec:
         command: ["python", "manage.py", "runserver", "0.0.0.0:8000"]
         ports:
         - containerPort: 8000
+        env:
+        - name: LAUNCH_BOT_METHOD
+          value: "kubernetes"
+        - name: K8S_SECRETS
+          value: transcript-secrets
+        - name: K8S_DOCKER_SECRETS
+          value: docker-secrets
+        - name: BOT_POD_IMAGE
+          value:  vanyabrucker/transcript-meeting-recorder
+        - name: CUBER_RELEASE_VERSION
+          value: "1.0.2_staging"
+        - name: CUBER_NAMESPACE
+          value: "default"
         envFrom:
         - configMapRef:
             name: transcript-meeting-recorder-config
