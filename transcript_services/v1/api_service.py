@@ -30,7 +30,7 @@ def start_transcription(transcript_uuid):
         raise ValueError("API URL is not set in environment variables.")
 
     url = os.getenv("TRANSCRIPT_API_URL") + "/api/v1/record/done"
-    logger.info(f"Transcript URL: {base_url}")
+    logger.debug(f"Transcript URL: {url}")
 
     # Request headers
     headers = {
