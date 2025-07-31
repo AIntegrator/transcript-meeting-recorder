@@ -1,6 +1,10 @@
 import os
 
 import requests
+import logging
+
+# Setup logging
+logger = logging.getLogger(__name__)
 
 
 def start_transcription(transcript_uuid):
@@ -19,11 +23,14 @@ def start_transcription(transcript_uuid):
     if not api_key:
         raise ValueError("API key is not set in environment variables.")
 
-    # API endpoint
-    url = os.getenv("TRANSCRIPT_API_URL") + "/v1/record/done"
+    # API host
+    base_url = os.getenv("TRANSCRIPT_API_URL")
 
-    if not url:
+    if not base_url:
         raise ValueError("API URL is not set in environment variables.")
+
+    url = os.getenv("TRANSCRIPT_API_URL") + "/api/v1/record/done"
+    logger.info(f"Transcript URL: {base_url}")
 
     # Request headers
     headers = {
