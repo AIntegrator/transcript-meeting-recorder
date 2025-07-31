@@ -21,6 +21,13 @@ The meeting recorder is a clone of the open source repository 'attendee' by Noah
 - Install skaffold: `brew install skaffold`
 - Install Docker Desktop: https://www.docker.com/products/docker-desktop
 - Start Docker Desktop with Kubernetes enabled and ensure you are in the desktop context: `kubectl config current-context`
+- CLone the transcript-k8s repository for the k8s manifests.
+- Populate the skaffold config file with your local k8s manifests path, e.g.:
+  - ```yaml
+    manifests:
+        rawYaml:
+        - /Users/USERNAME/K8S_REPO_PATH/transcript-k8s/deployment-meeting-recorder-api-dev.yaml)
+    ```
 - Run skaffold in dev mode: `skaffold dev
 
 ## Deployment
