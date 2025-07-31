@@ -16,10 +16,10 @@ build:
           - 'transcript_meeting_recorder/static/**/*'
 manifests:
   rawYaml:
-    - k8s/deployment-dev.yaml
-    - k8s/secret-transcript.yaml
-    - k8s/secret-docker.yaml
-    - k8s/role-bot.yaml
+    - /Users/vanyabrucker/src/transcript-k8s/deployment-meeting-recorder-api-dev.yaml
+    - /Users/vanyabrucker/src/transcript-k8s/secret-transcript.yaml
+    - /Users/vanyabrucker/src/transcript-k8s/secret-docker.yaml
+    - /Users/vanyabrucker/src/transcript-k8s/role-meeting-recorder-bot.yaml
 deploy:
   kubectl: {}
 #portForward:
