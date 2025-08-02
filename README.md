@@ -32,8 +32,8 @@ The meeting recorder is a clone of the open source repository 'attendee' by Noah
 
 ## Deployment
 
-- Build the Docker image: `docker build --platform=linux/amd64 -t vanyabrucker/transcript-meeting-recorder:1.0.3_staging -f Dockerfile.dev .` (Takes about 5 minutes)
-- Push the image to Docker Hub: `docker push vanyabrucker/transcript-meeting-recorder:1.0.3_staging`
+- Build the Docker image: `docker build --platform=linux/amd64 -t vanyabrucker/transcript-meeting-recorder:1.0.6_staging -f Dockerfile.dev .` (Takes about 5 minutes)
+- Push the image to Docker Hub: `docker push vanyabrucker/transcript-meeting-recorder:1.0.6_staging`
 
 
 ## Calling the API
