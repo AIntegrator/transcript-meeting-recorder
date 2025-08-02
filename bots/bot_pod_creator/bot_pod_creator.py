@@ -87,20 +87,19 @@ class BotPodCreator:
                             }
                         ),
                         env_from=[
-                            # environment variables for the bot
-                            #client.V1EnvFromSource(
-                            #    config_map_ref=client.V1ConfigMapEnvSource(
-                            #        name="env"
-                            #    )
-                            #),
                             client.V1EnvFromSource(
-                                secret_ref=client.V1SecretEnvSource(
-                                    name= os.getenv("K8S_SECRETS", "app-secrets")
+                                config_map_ref=client.V1ConfigMapEnvSource(
+                                    name=os.getenv("K8S_CONFIG", "transcript-config")
                                 )
                             ),
                             client.V1EnvFromSource(
                                 secret_ref=client.V1SecretEnvSource(
-                                    name=os.getenv("K8S_DOCKER_SECRETS", "app-secrets")
+                                    name= os.getenv("K8S_SECRETS", "transcript-secrets")
+                                )
+                            ),
+                            client.V1EnvFromSource(
+                                secret_ref=client.V1SecretEnvSource(
+                                    name=os.getenv("K8S_DOCKER_SECRETS", "docker-secrets")
                                 )
                             )
                         ],
