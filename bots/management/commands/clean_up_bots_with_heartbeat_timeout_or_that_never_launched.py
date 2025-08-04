@@ -16,7 +16,7 @@ class Command(BaseCommand):
 
     def __init__(self):
         super().__init__()
-        self.namespace = "attendee"
+        self.namespace = os.getenv('CUBER_NAMESPACE', "attendee")
 
     def terminate_bot(self, bot, event_sub_type):
         try:

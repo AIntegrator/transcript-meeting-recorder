@@ -1,4 +1,5 @@
 import logging
+import os
 from typing import List
 
 from django.core.management.base import BaseCommand
@@ -18,7 +19,7 @@ class Command(BaseCommand):
         except config.ConfigException:
             config.load_kube_config()
         self.v1 = client.CoreV1Api()
-        self.namespace = "attendee"
+        self.namespace = os.getenv('CUBER_NAMESPACE', "attendee")
         logger.info("initialized kubernetes client")
 
     def handle(self, *args, **options):

@@ -7,7 +7,7 @@ from kubernetes import client, config
 # fmt: off
 
 class BotPodCreator:
-    def __init__(self, namespace: str = "attendee"):
+    def __init__(self, namespace: str = os.getenv('CUBER_NAMESPACE', "attendee")):
         try:
             config.load_incluster_config()
         except config.ConfigException:
@@ -51,6 +51,7 @@ class BotPodCreator:
         # Run entrypoint script first, then the bot command
         bot_cmd = f"python manage.py run_bot --botid {bot_id}"
         command = ["/bin/bash", "-c", f"/opt/bin/entrypoint.sh && {bot_cmd}"]
+        #command = ["/bin/bash", "-c", "/opt/bin/entrypoint.sh && sleep infinity"] For debugging purposes because with 'sleep infinity' pod doesn't die
 
         # Metadata labels matching the deployment
         labels = {
@@ -86,15 +87,19 @@ class BotPodCreator:
                             }
                         ),
                         env_from=[
-                            # environment variables for the bot
                             client.V1EnvFromSource(
                                 config_map_ref=client.V1ConfigMapEnvSource(
-                                    name="env"
+                                    name=os.getenv("K8S_CONFIG", "transcript-config")
                                 )
                             ),
                             client.V1EnvFromSource(
                                 secret_ref=client.V1SecretEnvSource(
-                                    name="app-secrets"
+                                    name= os.getenv("K8S_SECRETS", "transcript-secrets")
+                                )
+                            ),
+                            client.V1EnvFromSource(
+                                secret_ref=client.V1SecretEnvSource(
+                                    name=os.getenv("K8S_DOCKER_SECRETS", "docker-secrets")
                                 )
                             )
                         ],
@@ -104,7 +109,7 @@ class BotPodCreator:
                 restart_policy="Never",
                 image_pull_secrets=[
                     client.V1LocalObjectReference(
-                        name="regcred"
+                        name=os.getenv("K8S_DOCKER_SECRETS", "app-secrets")
                     )
                 ],
                 termination_grace_period_seconds=60,

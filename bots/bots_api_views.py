@@ -160,6 +160,7 @@ class RecordingCreateView(APIView):
 
     def post(self, request):
         logger.info(f"Received request: {request.data}")
+
         # Validate the request data
         serializer = CreateBotSerializer(data=request.data)
         if not serializer.is_valid():
@@ -185,6 +186,7 @@ class RecordingCreateView(APIView):
         rtmp_settings = serializer.validated_data["rtmp_settings"]
         recording_settings = serializer.validated_data["recording_settings"]
         debug_settings = serializer.validated_data["debug_settings"]
+        bot_image = serializer.validated_data["bot_image"]
 
         settings = {
             "transcription_settings": transcription_settings,
@@ -201,6 +203,10 @@ class RecordingCreateView(APIView):
         )
 
         Recording.objects.create(bot=bot, recording_type=RecordingTypes.AUDIO_AND_VIDEO, transcription_type=TranscriptionTypes.NON_REALTIME, transcription_provider=transcription_provider_from_meeting_url_and_transcription_settings(meeting_url, transcription_settings), is_default_recording=True, file_name=file_name)
+
+        if bot_image:
+            logger.info("Bot has image.")
+            create_bot_media_request_for_image(bot, bot_image)
 
         # Try to transition the state from READY to JOINING
         BotEventManager.create_event(bot, BotEventTypes.JOIN_REQUESTED)
