@@ -41,14 +41,14 @@ def start_transcription(transcript_uuid):
     params = {"transcript_id": transcript_uuid}
 
     # Send POST request
-    response = requests.post(url, headers=headers, params=params)
+    response = requests.post(url, headers=headers, params=params, timeout=30)
 
     # Check if request was successful
     if response.status_code == 200:
-        print(f"Successfully started transcription for UUID: {transcript_uuid}")
+        logger.info(f"Successfully started transcription for UUID: {transcript_uuid}")
     else:
-        print(f"Error starting transcription: {response.status_code}")
-        print(f"Response: {response.text}")
+        logger.error(f"Error starting transcription: {response.status_code}")
+        logger.error(f"Response: {response.text}")
 
     return response
 
