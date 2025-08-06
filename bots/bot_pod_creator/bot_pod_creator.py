@@ -1,8 +1,11 @@
 import os
 import uuid
+import logging
 from typing import Dict, Optional
 
 from kubernetes import client, config
+
+logger = logging.getLogger(__name__)
 
 # fmt: off
 
@@ -15,7 +18,9 @@ class BotPodCreator:
         
         self.v1 = client.CoreV1Api()
         self.namespace = namespace
-        
+
+        logger.info(f"Bot Pod Creator namespace: {self.namespace}")
+
         # Get configuration from environment variables
         self.app_name = os.getenv('CUBER_APP_NAME', 'attendee')
         self.app_version = os.getenv('CUBER_RELEASE_VERSION')
