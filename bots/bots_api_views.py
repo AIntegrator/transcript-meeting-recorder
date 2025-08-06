@@ -159,7 +159,11 @@ class RecordingCreateView(APIView):
     authentication_classes = [ApiKeyAuthentication]
 
     def post(self, request):
-        logger.info(f"Received request: {request.data}")
+        logger.info(f"Received request: meeting_url: {request.data.get('meeting_url', '-')}, "
+                    f"bot_name: {request.data.get('bot_name', '-')}, "
+                    f"file_name: {request.data.get('file_name', '-')}, "
+                    f"recording_settings: {request.data.get('recording_settings', '-')}"
+        )
 
         # Validate the request data
         serializer = CreateBotSerializer(data=request.data)
