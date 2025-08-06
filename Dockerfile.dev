@@ -82,6 +82,9 @@ FROM base AS deps
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
+# Pre-populate the cache for tldextract
+RUN python -c "import tldextract; tldextract.extract('google.com')"
+
 ENV TINI_VERSION=v0.19.0
 ADD https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini /tini
 RUN chmod +x /tini
