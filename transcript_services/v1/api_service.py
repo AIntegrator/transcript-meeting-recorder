@@ -61,7 +61,7 @@ def could_not_record(transcript_id):
         raise ValueError("API key is not set in environment variables.")
 
     # API endpoint
-    url = os.getenv("TRANSCRIPT_API_URL") + "/v1/record/failed"
+    url = os.getenv("TRANSCRIPT_API_URL") + "/api/v1/record/failed"
 
     if not url:
         raise ValueError("API URL is not set in environment variables.")
