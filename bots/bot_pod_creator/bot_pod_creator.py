@@ -62,91 +62,95 @@ class BotPodCreator:
             "app": "bot-proc"
         }
 
-        pod = client.V1Pod(
+        # ...existing code...
+
+        job = client.V1Job(
             metadata=client.V1ObjectMeta(
                 name=bot_name,
                 namespace=self.namespace,
                 labels=labels
             ),
-            spec=client.V1PodSpec(
-                containers=[
-                    client.V1Container(
-                        name="bot-proc",
-                        image=self.image,
-                        image_pull_policy="Always",
-                        command=command,
-                        resources=client.V1ResourceRequirements(
-                            requests={
-                                "cpu": bot_cpu_request,
-                                "memory": os.getenv("BOT_MEMORY_REQUEST", "4Gi"),
-                                "ephemeral-storage": os.getenv("BOT_EPHEMERAL_STORAGE_REQUEST", "10Gi")
-                            },
-                            limits={
-                                "memory": os.getenv("BOT_MEMORY_LIMIT", "4Gi"),
-                                "ephemeral-storage": os.getenv("BOT_EPHEMERAL_STORAGE_LIMIT", "10Gi")
-                            }
-                        ),
-                        env_from=[
-                            client.V1EnvFromSource(
-                                config_map_ref=client.V1ConfigMapEnvSource(
-                                    name=os.getenv("K8S_CONFIG", "transcript-config")
-                                )
-                            ),
-                            client.V1EnvFromSource(
-                                secret_ref=client.V1SecretEnvSource(
-                                    name= os.getenv("K8S_SECRETS", "transcript-secrets")
-                                )
-                            ),
-                            client.V1EnvFromSource(
-                                secret_ref=client.V1SecretEnvSource(
-                                    name=os.getenv("K8S_DOCKER_SECRETS", "docker-secrets")
-                                )
+            spec=client.V1JobSpec(
+                template=client.V1PodTemplateSpec(
+                    metadata=client.V1ObjectMeta(labels=labels),
+                    spec=client.V1PodSpec(
+                        containers=[
+                            client.V1Container(
+                                name="bot-proc",
+                                image=self.image,
+                                image_pull_policy="Always",
+                                command=command,
+                                resources=client.V1ResourceRequirements(
+                                    requests={
+                                        "cpu": bot_cpu_request,
+                                        "memory": os.getenv("BOT_MEMORY_REQUEST", "4Gi"),
+                                        "ephemeral-storage": os.getenv("BOT_EPHEMERAL_STORAGE_REQUEST", "10Gi")
+                                    },
+                                    limits={
+                                        "memory": os.getenv("BOT_MEMORY_LIMIT", "4Gi"),
+                                        "ephemeral-storage": os.getenv("BOT_EPHEMERAL_STORAGE_LIMIT", "10Gi")
+                                    }
+                                ),
+                                env_from=[
+                                    client.V1EnvFromSource(
+                                        config_map_ref=client.V1ConfigMapEnvSource(
+                                            name=os.getenv("K8S_CONFIG", "transcript-config")
+                                        )
+                                    ),
+                                    client.V1EnvFromSource(
+                                        secret_ref=client.V1SecretEnvSource(
+                                            name=os.getenv("K8S_SECRETS", "transcript-secrets")
+                                        )
+                                    ),
+                                    client.V1EnvFromSource(
+                                        secret_ref=client.V1SecretEnvSource(
+                                            name=os.getenv("K8S_DOCKER_SECRETS", "docker-secrets")
+                                        )
+                                    )
+                                ],
+                                env=[]
                             )
                         ],
-                        env=[]
+                        restart_policy="Never",
+                        image_pull_secrets=[
+                            client.V1LocalObjectReference(
+                                name=os.getenv("K8S_DOCKER_SECRETS", "app-secrets")
+                            )
+                        ],
+                        termination_grace_period_seconds=60,
+                        tolerations=[
+                            client.V1Toleration(
+                                key="node.kubernetes.io/not-ready",
+                                operator="Exists",
+                                effect="NoExecute",
+                                toleration_seconds=900
+                            ),
+                            client.V1Toleration(
+                                key="node.kubernetes.io/unreachable",
+                                operator="Exists",
+                                effect="NoExecute",
+                                toleration_seconds=900
+                            )
+                        ]
                     )
-                ],
-                restart_policy="Never",
-                image_pull_secrets=[
-                    client.V1LocalObjectReference(
-                        name=os.getenv("K8S_DOCKER_SECRETS", "app-secrets")
-                    )
-                ],
-                termination_grace_period_seconds=60,
-                # Add tolerations to allow pods to be scheduled on nodes with specific taints
-                # This can help with scheduling during autoscaling events
-                tolerations=[
-                    client.V1Toleration(
-                        key="node.kubernetes.io/not-ready",
-                        operator="Exists",
-                        effect="NoExecute",
-                        toleration_seconds=900  # Tolerate not-ready nodes for 15 minutes
-                    ),
-                    client.V1Toleration(
-                        key="node.kubernetes.io/unreachable",
-                        operator="Exists",
-                        effect="NoExecute",
-                        toleration_seconds=900  # Tolerate unreachable nodes for 15 minutes
-                    )
-                ]
+                ),
+                backoff_limit=4  # Number of retries before considering the job failed
             )
         )
 
         try:
-            api_response = self.v1.create_namespaced_pod(
+            api_response = client.BatchV1Api().create_namespaced_job(
                 namespace=self.namespace,
-                body=pod
+                body=job
             )
-            
             return {
                 "name": api_response.metadata.name,
-                "status": api_response.status.phase,
+                "status": "JobCreated",
                 "created": True,
                 "image": self.image,
                 "app_instance": self.app_instance,
                 "app_version": self.app_version
             }
-            
         except client.ApiException as e:
             return {
                 "name": bot_name,
