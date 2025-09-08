@@ -28,7 +28,7 @@ The meeting recorder is a clone of the open source repository 'attendee' by Noah
         rawYaml:
         - /Users/USERNAME/K8S_REPO_PATH/transcript-k8s/deployment-meeting-recorder-api-dev.yaml)
     ```
-- Create and populate teh docker and transcript secrets files:
+- Create and populate the docker and transcript secrets files:
   - `cp ./secret-examples/secret-docker.yaml secret-docker.yaml`
   - `cp ./secret-examples/secret-transcript.yaml secret-transcript.yaml`
 - Apply the secrets to your Kubernetes cluster:
@@ -37,7 +37,7 @@ The meeting recorder is a clone of the open source repository 'attendee' by Noah
 - Apply the configmap:
   - `kubectl apply -f configmap-transcript.yaml`
 - Start the dependencies: `apply -f deployment-redis.yaml`, `apply -f deployment-postgres.yaml`, `apply -f role-meeting-recorder-bot.yaml`
-- Run skaffold in dev mode: `skaffold dev
+- Run skaffold in dev mode: `skaffold dev`
 
 ## Deployment
 
