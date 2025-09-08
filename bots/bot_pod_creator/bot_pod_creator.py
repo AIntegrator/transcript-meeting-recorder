@@ -153,6 +153,7 @@ class BotPodCreator:
             }
             
         except client.ApiException as e:
+            logger.error(f"Error creating bot pod: {e}")
             return {
                 "name": bot_name,
                 "status": "Error",
