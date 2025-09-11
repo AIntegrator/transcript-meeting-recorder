@@ -26,12 +26,15 @@ class BotPodCreator:
         self.app_version = os.getenv('CUBER_RELEASE_VERSION')
         
         if not self.app_version:
+            logger.error("CUBER_RELEASE_VERSION environment variable is required")
             raise ValueError("CUBER_RELEASE_VERSION environment variable is required")
             
         # Parse instance from version (matches your pattern of {hash}-{timestamp})
         self.app_instance = f"{self.app_name}-{self.app_version.split('-')[-1]}"
         default_pod_image = f"nduncan{self.app_name}/{self.app_name}"
         self.image = f"{os.getenv('BOT_POD_IMAGE', default_pod_image)}:{self.app_version}"
+
+        logger.info(f"Bot Pod image: {self.image}")
 
     def create_bot_pod(
         self,
