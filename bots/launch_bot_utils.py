@@ -8,9 +8,11 @@ logger = logging.getLogger(__name__)
 
 
 def launch_bot(bot):
+    logger.info(f"Launching bot {bot.object_id} ({bot.id})...")
     # If this instance is running in Kubernetes, use the Kubernetes pod creator
     # which spins up a new pod for the bot
     if os.getenv("LAUNCH_BOT_METHOD") == "kubernetes":
+        logger.info(f"Launching bot {bot.object_id} ({bot.id}) via Kubernetes...")
         from .bot_pod_creator import BotPodCreator
 
         bot_pod_creator = BotPodCreator()
@@ -30,6 +32,7 @@ def launch_bot(bot):
             except Exception as e:
                 logger.error(f"Failed to create fatal error bot not launched event for bot {bot.object_id} ({bot.id}): {str(e)}")
     else:
+        logger.info(f"Launching bot {bot.object_id} ({bot.id}) via celery...")
         # Default to launching bot via celery
         from .tasks.run_bot_task import run_bot
 
