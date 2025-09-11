@@ -24,9 +24,9 @@ manifests:
     - /Users/vanyabrucker/src/transcript-k8s/role-meeting-recorder-bot.yaml
 deploy:
   kubectl: {}
-#portForward:
-#  - resourceType: Service
-#    resourceName: transcript-meeting-recorder-api # Name of the Kubernetes Service
-#    namespace: default
-#    port: 8000 # The port the service exposes
-#    localPort: 8080 # The local port you want to access it on
+portForward:
+  - resourceType: Service
+    resourceName: transcript-meeting-recorder-api # Name of the Kubernetes Service
+    namespace: default
+    port: 80 # The port the service exposes
+    localPort: 8000 # The local port you want to access it on
