@@ -36,7 +36,7 @@ The meeting recorder is a clone of the open source repository 'attendee' by Noah
   - `kubectl apply -f secret-transcript.yaml`
 - Apply the configmap:
   - `kubectl apply -f configmap-transcript.yaml`
-- Start the dependencies: `apply -f deployment-redis.yaml`, `apply -f deployment-postgres.yaml`, `apply -f role-meeting-recorder-bot.yaml`
+- Start the dependencies: `kubectl apply -f deployment-redis.yaml`, `kubectl apply -f deployment-postgres.yaml`, `kubectl apply -f role-meeting-recorder-bot.yaml`
 - Run skaffold in dev mode: `skaffold dev`
 
 ## Deployment
