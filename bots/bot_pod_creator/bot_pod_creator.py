@@ -40,6 +40,7 @@ class BotPodCreator:
 
         # It's annoying but if we want chrome sandboxing, we need to use Unconfined seccomp profile
         # because chrome with sandboxing needs some syscalls that are not allowed by the default profile
+        logger.info(f"Using ENABLE_CHROME_SANDBOX: {os.getenv('ENABLE_CHROME_SANDBOX', 'false')}")
         if os.getenv("ENABLE_CHROME_SANDBOX", "false").lower() == "true":
             seccomp_profile = client.V1SeccompProfile(type="Unconfined")
         else:
@@ -134,7 +135,7 @@ class BotPodCreator:
         return client.V1Container(
                         name="bot-proc",
                         image=self.image,
-                        image_pull_policy="Always",
+                        image_pull_policy=os.getenv('BOT_POD_IMAGE_PULL_POLICY', 'Always'),
                         args=args,
                         resources=client.V1ResourceRequirements(
                             requests={
