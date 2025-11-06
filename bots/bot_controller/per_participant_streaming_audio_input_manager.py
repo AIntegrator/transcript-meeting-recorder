@@ -6,7 +6,6 @@ import numpy as np
 import webrtcvad
 
 from bots.models import Credentials, TranscriptionProviders
-from bots.transcription_providers.deepgram.deepgram_streaming_transcriber import DeepgramStreamingTranscriber
 
 logger = logging.getLogger(__name__)
 
@@ -19,10 +18,9 @@ def calculate_normalized_rms(audio_bytes):
 
 
 class PerParticipantStreamingAudioInputManager:
-    def __init__(self, *, save_utterance_callback, get_participant_callback, sample_rate, transcription_provider, bot):
+    def __init__(self, *, get_participant_callback, sample_rate, transcription_provider, bot):
         self.queue = queue.Queue()
 
-        self.save_utterance_callback = save_utterance_callback
         self.get_participant_callback = get_participant_callback
 
         self.utterances = {}
@@ -57,16 +55,7 @@ class PerParticipantStreamingAudioInputManager:
     def create_streaming_transcriber(self, speaker_id, metadata):
         logger.info(f"Creating streaming transcriber for speaker {speaker_id}")
         if self.transcription_provider == TranscriptionProviders.DEEPGRAM:
-            metadata_list = [f"{key}:{value}" for key, value in metadata.items()] if metadata else None
-            return DeepgramStreamingTranscriber(
-                deepgram_api_key=self.deepgram_api_key,
-                interim_results=True,
-                language=self.bot.deepgram_language(),
-                model=self.bot.deepgram_model(),
-                callback=self.bot.deepgram_callback(),
-                sample_rate=self.sample_rate,
-                metadata=metadata_list,
-            )
+            logger.error("Deepgram streaming transcriber removed to make lean microservice")
         else:
             raise Exception(f"Unsupported transcription provider: {self.transcription_provider}")
 
@@ -93,7 +82,9 @@ class PerParticipantStreamingAudioInputManager:
 
     def monitor_transcription(self):
         speakers_to_remove = []
-        for speaker_id, streaming_transcriber in self.streaming_transcribers.items():
+        streaming_transcriber_keys = list(self.streaming_transcribers.keys())
+        for speaker_id in streaming_transcriber_keys:
+            streaming_transcriber = self.streaming_transcribers[speaker_id]
             if time.time() - self.last_nonsilent_audio_time[speaker_id] > self.SILENCE_DURATION_LIMIT:
                 streaming_transcriber.finish()
                 speakers_to_remove.append(speaker_id)

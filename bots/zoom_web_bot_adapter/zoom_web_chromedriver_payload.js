@@ -1,10 +1,258 @@
+class DominantSpeakerManager {
+    constructor() {
+        this.dominantSpeakerStreamId = null;
+        this.captionAudioTimes = [];
+    }
+
+    getLastSpeakerIdForTimestampMs(timestampMs) {
+        // Find the caption audio times that are before timestampMs
+        const captionAudioTimesBeforeTimestampMs = this.captionAudioTimes.filter(captionAudioTime => captionAudioTime.timestampMs <= timestampMs);
+        if (captionAudioTimesBeforeTimestampMs.length === 0) {
+            return null;
+        }
+        // Return the caption audio time with the highest timestampMs
+        return captionAudioTimesBeforeTimestampMs.reduce((max, captionAudioTime) => captionAudioTime.timestampMs > max.timestampMs ? captionAudioTime : max).speakerId;
+    }
+
+    addCaptionAudioTime(timestampMs, speakerId) {
+        this.captionAudioTimes.push({
+            timestampMs: timestampMs,
+            speakerId: speakerId
+        });
+    }
+
+    setDominantSpeakerStreamId(dominantSpeakerStreamId) {
+        this.dominantSpeakerStreamId = dominantSpeakerStreamId.toString();
+    }
+
+    getDominantSpeaker() {
+        return virtualStreamToPhysicalStreamMappingManager.virtualStreamIdToParticipant(this.dominantSpeakerStreamId);
+    }
+}
+
+const handleAudioTrack = async (event) => {
+    let lastAudioFormat = null;  // Track last seen format
+    const audioDataQueue = [];
+    const ACTIVE_SPEAKER_LATENCY_MS = 2000;
+
+    // Start continuous background processing of the audio queue
+    const processAudioQueue = () => {
+        while (audioDataQueue.length > 0 &&
+            Date.now() - audioDataQueue[0].audioArrivalTime >= ACTIVE_SPEAKER_LATENCY_MS) {
+            const { audioData, audioArrivalTime } = audioDataQueue.shift();
+
+            // Get the dominant speaker and assume that's who the participant speaking is
+            const dominantSpeakerId = dominantSpeakerManager.getLastSpeakerIdForTimestampMs(audioArrivalTime);
+
+            // Send audio data through websocket
+            if (dominantSpeakerId) {
+                ws.sendPerParticipantAudio(dominantSpeakerId, audioData);
+            }
+        }
+    };
+
+    // Set up background processing every 100ms
+    const queueProcessingInterval = setInterval(processAudioQueue, 100);
+
+    // Clean up interval when track ends
+    event.track.addEventListener('ended', () => {
+        clearInterval(queueProcessingInterval);
+        console.log('Audio track ended, cleared queue processing interval');
+    });
+
+    window.ws.sendJson({
+        type: 'AudioTrackStarted',
+        trackId: event.track.id
+    });
+
+    try {
+      // Create processor to get raw frames
+      const processor = new MediaStreamTrackProcessor({ track: event.track });
+      const generator = new MediaStreamTrackGenerator({ kind: 'audio' });
+
+      // Get readable stream of audio frames
+      const readable = processor.readable;
+      const writable = generator.writable;
+
+      // Transform stream to intercept frames
+      const transformStream = new TransformStream({
+          async transform(frame, controller) {
+              if (!frame) {
+                  return;
+              }
+
+              try {
+                  // Check if controller is still active
+                  if (controller.desiredSize === null) {
+                      frame.close();
+                      return;
+                  }
+
+                  // Copy the audio data
+                  const numChannels = frame.numberOfChannels;
+                  const numSamples = frame.numberOfFrames;
+                  const audioData = new Float32Array(numSamples);
+
+                  // Copy data from each channel
+                  // If multi-channel, average all channels together
+                  if (numChannels > 1) {
+                      // Temporary buffer to hold each channel's data
+                      const channelData = new Float32Array(numSamples);
+
+                      // Sum all channels
+                      for (let channel = 0; channel < numChannels; channel++) {
+                          frame.copyTo(channelData, { planeIndex: channel });
+                          for (let i = 0; i < numSamples; i++) {
+                              audioData[i] += channelData[i];
+                          }
+                      }
+
+                      // Average by dividing by number of channels
+                      for (let i = 0; i < numSamples; i++) {
+                          audioData[i] /= numChannels;
+                      }
+                  } else {
+                      // If already mono, just copy the data
+                      frame.copyTo(audioData, { planeIndex: 0 });
+                  }
+
+                  // console.log('frame', frame)
+                  // console.log('audioData', audioData)
+
+                  // Check if audio format has changed
+                  const currentFormat = {
+                      numberOfChannels: 1,
+                      originalNumberOfChannels: frame.numberOfChannels,
+                      numberOfFrames: frame.numberOfFrames,
+                      sampleRate: frame.sampleRate,
+                      format: frame.format,
+                      duration: frame.duration
+                  };
+
+                  // If format is different from last seen format, send update
+                  if (!lastAudioFormat ||
+                      JSON.stringify(currentFormat) !== JSON.stringify(lastAudioFormat)) {
+                      lastAudioFormat = currentFormat;
+                      ws.sendJson({
+                          type: 'AudioFormatUpdate',
+                          format: currentFormat
+                      });
+                  }
+
+                  // If the audioData buffer is all zeros, we still want to send it. It's only one mixed audio stream.
+                  // It seems to help with the transcription.
+                  //if (audioData.every(value => value === 0)) {
+                  //    return;
+                  //}
+
+                  // Add to queue with timestamp - the background thread will process it
+                  audioDataQueue.push({
+                    audioArrivalTime: Date.now(),
+                    audioData: audioData
+                  });
+
+                  // Pass through the original frame
+                  controller.enqueue(frame);
+              } catch (error) {
+                  console.error('Error processing frame:', error);
+                  frame.close();
+              }
+          },
+          flush() {
+              console.log('Transform stream flush called');
+              // Clear the interval when the stream ends
+              clearInterval(queueProcessingInterval);
+          }
+      });
+
+      // Create an abort controller for cleanup
+      const abortController = new AbortController();
+
+      try {
+          // Connect the streams
+          await readable
+              .pipeThrough(transformStream)
+              .pipeTo(writable, {
+                  signal: abortController.signal
+              })
+              .catch(error => {
+                  if (error.name !== 'AbortError') {
+                      console.error('Pipeline error:', error);
+                  }
+                  // Clear the interval on error
+                  clearInterval(queueProcessingInterval);
+              });
+      } catch (error) {
+          console.error('Stream pipeline error:', error);
+          abortController.abort();
+          // Clear the interval on error
+          clearInterval(queueProcessingInterval);
+      }
+
+    } catch (error) {
+        console.error('Error setting up audio interceptor:', error);
+        // Clear the interval on error
+        clearInterval(queueProcessingInterval);
+    }
+  };
+
 // Style manager
 class StyleManager {
     constructor() {
+        this.meetingAudioStream = null;
+        this.audioStreams = []
+    }
+
+    addAudioStream(audioStream) {
+        this.audioStreams.push(audioStream);
     }
 
     async start() {
         console.log('StyleManager start');
+
+        // This code is just grabbing a unified audio stream
+
+        // Retrieve all <audio> elements on the page
+        const audioElements = document.querySelectorAll('audio');
+
+        this.audioContext = new AudioContext({ sampleRate: 48000 });
+
+        // Combine the audioStreams we've accumulated with anything from audioElements in the DOM.
+        const audioStreamTracks = this.audioStreams.map(stream => {
+            return stream.getAudioTracks()[0];
+        })
+        const audioElementTracks = Array.from(audioElements).map(audioElement => {
+            return audioElement.srcObject.getAudioTracks()[0];
+        });
+        this.audioTracks = audioStreamTracks.concat(audioElementTracks);
+
+        this.audioSources = this.audioTracks.map(track => {
+            const mediaStream = new MediaStream([track]);
+            return this.audioContext.createMediaStreamSource(mediaStream);
+        });
+
+        // Create a destination node
+        const destination = this.audioContext.createMediaStreamDestination();
+
+        // Connect all sources to the destination
+        this.audioSources.forEach(source => {
+            source.connect(destination);
+        });
+
+        this.meetingAudioStream = destination.stream;
+
+        if (this.meetingAudioStream.getAudioTracks().length == 0)
+        {
+            console.log("this.meetingAudioStream.getAudioTracks() had length 0")
+            return;
+        }
+
+        if (initialData.sendPerParticipantAudio)
+            handleAudioTrack({track: this.meetingAudioStream.getAudioTracks()[0]});
+    }
+
+    getMeetingAudioStream() {
+        return this.meetingAudioStream;
     }
 
     async stop() {
@@ -210,11 +458,12 @@ class UserManager {
 
     convertUser(zoomUser) {
         return {
-            deviceId: zoomUser.userId,
+            deviceId: zoomUser.userId.toString(),
             displayName: zoomUser.userName,
             fullName: zoomUser.userName,
             profile: '',
             status: zoomUser.state,
+            isHost: zoomUser.isHost,
             humanized_status: zoomUser.state === "active" ? "in_meeting" : "not_in_meeting",
             isCurrentUser: zoomUser.self
         };
@@ -295,10 +544,46 @@ class UserManager {
         }
     }
 }
-  
+
+// This code intercepts the connect method on the AudioNode class
+// When something is connected to the speaker the underlying track is added to our styleManager
+// so that it can be aggregated into a stream representing the meeting audio
+(() => {
+    const origConnect = AudioNode.prototype.connect;
+
+    AudioNode.prototype.connect = function(target, ...rest) {
+      // Only intercept connections directly to the speakers
+      if (target instanceof AudioDestinationNode) {
+        const ctx = this.context;
+        // Create a single tee per context
+        if (!ctx.__captureTee) {
+        try{
+          const tee = ctx.createGain();
+          const tap = ctx.createMediaStreamDestination();
+          origConnect.call(tee, ctx.destination); // keep normal playback
+          origConnect.call(tee, tap);             // capture
+          ctx.__captureTee = { tee, tap };
+          const capturedStream = tap.stream;
+          if (capturedStream)
+            window.styleManager.addAudioStream(capturedStream);
+        }
+        catch (error) {
+            console.error('Error in AudioNodeInterceptor:', error);
+        }
+        }
+
+        // Reroute to the tee instead of the destination
+        return origConnect.call(this, ctx.__captureTee.tee, ...rest);
+      }
+
+      return origConnect.call(this, target, ...rest);
+    };
+  })();
 
 const ws = new WebSocketClient();
 window.ws = ws;
+const dominantSpeakerManager = new DominantSpeakerManager();
+window.dominantSpeakerManager = dominantSpeakerManager;
 const styleManager = new StyleManager();
 window.styleManager = styleManager;
 const userManager = new UserManager(ws);
@@ -420,6 +705,10 @@ class BotOutputManager {
         this.gainNode = null;
         this.destination = null;
         this.botOutputAudioTrack = null;
+
+        // For outputting a stream
+        this.botOutputMediaStream = null;
+        this.botOutputPeerConnection = null;
     }
 
     connectVideoSourceToAudioContext() {
@@ -427,6 +716,20 @@ class BotOutputManager {
             this.videoSoundSource = this.audioContextForBotOutput.createMediaElementSource(this.botOutputVideoElement);
             this.videoSoundSource.connect(this.gainNode);
         }
+    }
+
+    playMediaStream(stream) {
+        if (this.botOutputMediaStream) {
+            this.botOutputMediaStream.disconnect();
+        }
+        this.botOutputMediaStream = stream;
+
+        turnOffMicAndCamera();
+
+        // after 1000 ms
+        setTimeout(() => {
+            turnOnMicAndCamera();
+        }, 1000);
     }
 
     playVideo(videoUrl) {
@@ -745,6 +1048,82 @@ class BotOutputManager {
         const timeUntilNextProcess = (this.nextPlayTime - currentTime) * 1000 * 0.8;
         setTimeout(() => this.processAudioQueue(), Math.max(0, timeUntilNextProcess));
     }
+
+    async getBotOutputPeerConnectionOffer() {
+        try
+        {
+            // 2) Create the RTCPeerConnection
+            this.botOutputPeerConnection = new RTCPeerConnection();
+
+            // 3) Receive the server's *video* and *audio*
+            const ms = new MediaStream();
+            this.botOutputPeerConnection.ontrack = (ev) => {
+                ms.addTrack(ev.track);
+                // If we've received both video and audio, play the stream
+                if (ms.getVideoTracks().length > 0 && ms.getAudioTracks().length > 0) {
+                    botOutputManager.playMediaStream(ms);
+                }
+            };
+
+            // We still want to receive the server's video
+            this.botOutputPeerConnection.addTransceiver('video', { direction: 'recvonly' });
+
+            // ❗ Instead of recvonly audio, we now **send** our mic upstream:
+            const meetingAudioStream = window.styleManager.getMeetingAudioStream();
+            for (const track of meetingAudioStream.getAudioTracks()) {
+                this.botOutputPeerConnection.addTrack(track, meetingAudioStream);
+            }
+
+            // Create/POST offer → set remote answer
+            const offer = await this.botOutputPeerConnection.createOffer();
+            await this.botOutputPeerConnection.setLocalDescription(offer);
+            return { sdp: this.botOutputPeerConnection.localDescription.sdp, type: this.botOutputPeerConnection.localDescription.type };
+        }
+        catch (e) {
+            return { error: e.message };
+        }
+    }
+
+    async startBotOutputPeerConnection(offerResponse) {
+        await this.botOutputPeerConnection.setRemoteDescription(offerResponse);
+
+        // Start latency measurement for the bot output peer connection
+        this.startLatencyMeter(this.botOutputPeerConnection, "bot-output");
+    }
+
+    startLatencyMeter(pc, label="rx") {
+        setInterval(async () => {
+            const stats = await pc.getStats();
+            let rtt_ms = 0, jb_a_ms = 0, jb_v_ms = 0, dec_v_ms = 0;
+
+            stats.forEach(r => {
+                if (r.type === 'candidate-pair' && r.state === 'succeeded' && r.nominated) {
+                    rtt_ms = (r.currentRoundTripTime || 0) * 1000;
+                }
+                if (r.type === 'inbound-rtp' && r.kind === 'audio') {
+                    const d = (r.jitterBufferDelay || 0);
+                    const n = (r.jitterBufferEmittedCount || 1);
+                    jb_a_ms = (d / n) * 1000;
+                }
+                if (r.type === 'inbound-rtp' && r.kind === 'video') {
+                    const d = (r.jitterBufferDelay || 0);
+                    const n = (r.jitterBufferEmittedCount || 1);
+                    jb_v_ms = (d / n) * 1000;
+                    dec_v_ms = ((r.totalDecodeTime || 0) / (r.framesDecoded || 1)) * 1000;
+                }
+            });
+
+            const est_audio_owd = (rtt_ms / 2) + jb_a_ms;
+            const est_video_owd = (rtt_ms / 2) + jb_v_ms + dec_v_ms;
+
+            const logStatement = `[${label}] est one-way: audio≈${est_audio_owd|0}ms, video≈${est_video_owd|0}ms  (rtt=${rtt_ms|0}, jb_a=${jb_a_ms|0}, jb_v=${jb_v_ms|0}, dec_v=${dec_v_ms|0})`;
+            console.log(logStatement);
+            window.ws.sendJson({
+                type: 'BOT_OUTPUT_PEER_CONNECTION_STATS',
+                logStatement: logStatement
+            });
+        }, 60000);
+    }
 }
 
 const botOutputManager = new BotOutputManager();
@@ -773,6 +1152,11 @@ navigator.mediaDevices.getUserMedia = function(constraints) {
             }
          }
 
+         if (constraints.video && botOutputManager.botOutputMediaStream) {
+            console.log("Adding botOutputMediaStream", botOutputManager.botOutputMediaStream.getVideoTracks()[0]);
+            newStream.addTrack(botOutputManager.botOutputMediaStream.getVideoTracks()[0]);
+        }
+
         // Audio sending not supported yet
         
         // If audio is requested, add our fake audio track
@@ -786,6 +1170,16 @@ navigator.mediaDevices.getUserMedia = function(constraints) {
             botOutputManager.connectVideoSourceToAudioContext();
         }
   
+        if (botOutputManager.botOutputMediaStream) {
+            // connect the botOutputMediaStream stream to the audio context
+            if (botOutputManager.botOutputMediaStream.getAudioTracks().length > 0) {
+                botOutputManager.initializeBotOutputAudioTrack();
+                const botOutputMediaStreamSource = botOutputManager.audioContextForBotOutput.createMediaStreamSource(botOutputManager.botOutputMediaStream);
+                botOutputMediaStreamSource.connect(botOutputManager.gainNode);
+                console.log("Connected botOutputMediaStream audio track to audio context");
+            }
+        }
+
         return newStream;
       })
       .catch(err => {

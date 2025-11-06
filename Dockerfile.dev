@@ -1,3 +1,5 @@
+# Dockerfile for development environment
+# Dockerfile.prod fails to run on M1 Macs due to Chrome installation issues.
 FROM --platform=linux/amd64 ubuntu:22.04 AS base
 
 SHELL ["/bin/bash", "-c"]
@@ -82,22 +84,30 @@ FROM base AS deps
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
-# Pre-populate the cache for tldextract
-RUN python -c "import tldextract; tldextract.extract('google.com')"
-
 ENV TINI_VERSION=v0.19.0
 ADD https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini /tini
 RUN chmod +x /tini
 
-WORKDIR /opt
-
 FROM deps AS build
 
+# Create non-root user
+RUN useradd -m -u 1000 -s /bin/bash app
+
+# Workdir owned by app in one shot during copy
+ENV project=attendee
+ENV cwd=/$project
 WORKDIR $cwd
-COPY . .
 
-COPY entrypoint.sh /opt/bin/entrypoint.sh
-RUN chmod +x /opt/bin/entrypoint.sh
-RUN adduser root pulse-access
+# Copy only what you need; set ownership/perm at copy time
+COPY --chown=app:app --chmod=0755 entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY --chown=app:app . .
 
-# CMD ["/bin/bash"] is added in entrypoint.sh
+# Make STATIC_ROOT writeable for the non-root user so collectstatic can run at startup
+RUN mkdir -p "$cwd/staticfiles" && chown -R app:app "$cwd/staticfiles"
+
+# Switch to non-root AFTER copies to avoid permission flakiness
+USER app
+
+# Use tini + entrypoint; CMD can be overridden by compose
+ENTRYPOINT ["/tini","--","/usr/local/bin/entrypoint.sh"]
+CMD ["bash"]

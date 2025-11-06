@@ -152,7 +152,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = "en-us"
 
-TIME_ZONE = "UTC"
+TIME_ZONE = os.getenv("TIME_ZONE", "UTC")
 
 USE_I18N = True
 
@@ -184,6 +184,9 @@ CELERY_RESULT_SERIALIZER = "json"
 REST_FRAMEWORK = {
     # YOUR SETTINGS
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "DEFAULT_THROTTLE_RATES": {
+        "project_post": os.getenv("PROJECT_POST_THROTTLE_RATE", "3000/min"),
+    },
 }
 
 SPECTACULAR_SETTINGS = {
@@ -214,3 +217,8 @@ STORAGES = {
 # Swift container configuration
 SWIFT_CONTAINER_MEETS = os.getenv("SWIFT_CONTAINER_MEETS")
 CHARGE_CREDITS_FOR_BOTS = os.getenv("CHARGE_CREDITS_FOR_BOTS", "false") == "true"
+
+BOT_POD_NAMESPACE = os.getenv("BOT_POD_NAMESPACE", "apps")
+WEBPAGE_STREAMER_POD_NAMESPACE = os.getenv("WEBPAGE_STREAMER_POD_NAMESPACE", "attendee-webpage-streamer")
+REQUIRE_HTTPS_WEBHOOKS = os.getenv("REQUIRE_HTTPS_WEBHOOKS", "true") == "true"
+MAX_METADATA_LENGTH = int(os.getenv("MAX_METADATA_LENGTH", 1000))

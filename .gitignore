@@ -90,8 +90,14 @@ target/
 *.pyc
 __pycache__/
 local_settings.py
-.pytest_cache/
 
+# Environment files (contain sensitive credentials)
 .env
+.env.local
+.env.*.local
+.env.bak
+*.env
 db.sqlite3
-.venv
+
+# History folder (contains file backups with potentially sensitive data)
+.history/

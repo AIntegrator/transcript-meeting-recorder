@@ -1,4 +1,5 @@
 import logging
+import uuid
 
 from django.http import HttpResponse
 
@@ -50,5 +51,6 @@ def process_checkout_session_completed(checkout_session):
             description=f"Stripe payment of ${amount_usd:.2f}",
         )
     except Exception as e:
-        logger.error(f"Error creating credit transaction: {e}")
-        return HttpResponse(f"Error creating credit transaction: {e}", status=400)
+        error_id = str(uuid.uuid4())
+        logger.error(f"Error creating credit transaction (error_id={error_id}): {e}")
+        return HttpResponse(f"Error creating credit transaction. Error ID: {error_id}", status=400)

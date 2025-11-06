@@ -2,7 +2,9 @@ services:
   recorder-worker:
     container_name: recorder-worker
     #build: ./transcript-meeting-recorder
-    build: ./
+    build:
+      context: ./
+      dockerfile: Dockerfile.dev
     env_file:
       - .env
     volumes:
@@ -18,7 +20,7 @@ services:
       [
         "/bin/bash",
         "-c",
-        "/opt/bin/entrypoint.sh && celery -A attendee worker -l INFO",
+        "/usr/local/bin/entrypoint.sh && celery -A attendee worker -l INFO",
       ]
 
   # attendee-scheduler-local:
@@ -36,7 +38,9 @@ services:
   recorder-api:
     container_name: recorder-api
     #build: ./transcript-meeting-recorder
-    build: ./
+    build:
+      context: ./
+      dockerfile: Dockerfile.dev
     env_file:
       - .env
     volumes:

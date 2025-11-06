@@ -1,13 +1,16 @@
 import json
 import logging
 import os
+import uuid
 from enum import Enum
 
 import redis
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.urls import reverse
 
+from .meeting_url_utils import meeting_type_from_url
 from .models import (
     Bot,
     BotChatMessageRequest,
@@ -28,8 +31,9 @@ from .models import (
 )
 from .serializers import (
     CreateBotSerializer,
+    PatchBotSerializer,
 )
-from .utils import meeting_type_from_url, transcription_provider_from_bot_creation_data
+from .utils import transcription_provider_from_bot_creation_data
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +119,7 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
         logger.error(f"Organization {project.organization.id} has insufficient credits. Please add credits in the Account -> Billing page.")
         return None, {"error": "Organization has run out of credits. Please add more credits in the Account -> Billing page."}
 
+    logger.debug("Serializing bot creation data...")
     serializer = CreateBotSerializer(data=data)
     if not serializer.is_valid():
         return None, serializer.errors
@@ -127,6 +132,7 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
         return None, error
 
     bot_name = serializer.validated_data["bot_name"]
+    recording_file_name = serializer.validated_data["recording_file_name"]
     transcription_settings = serializer.validated_data["transcription_settings"]
     rtmp_settings = serializer.validated_data["rtmp_settings"]
     recording_settings = serializer.validated_data["recording_settings"]
@@ -156,7 +162,14 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
         "callback_settings": callback_settings,
     }
 
+    # Only include recording_file_name if it's not None or empty
+    if recording_file_name:
+        settings["recording_file_name"] = recording_file_name
+
+    logger.debug("Creating bot with settings: " + str(settings))
+
     try:
+        logger.debug("Creating bot in database...")
         with transaction.atomic():
             bot = Bot.objects.create(
                 project=project,
@@ -185,9 +198,12 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
 
             # Create bot-level webhook subscriptions if provided
             if webhook_subscriptions:
+                logger.debug("Creating bot webhook subscriptions...")
                 create_webhook_subscriptions(webhook_subscriptions, project, bot)
 
+            logger.debug(f"Bot {bot.object_id} created successfully.")
             if bot.state == BotStates.READY:
+                logger.debug(f"Bot {bot.object_id} is in READY state, creating JOIN_REQUESTED event to initiate joining...")
                 # Try to transition the state from READY to JOINING
                 BotEventManager.create_event(bot=bot, event_type=BotEventTypes.JOIN_REQUESTED, event_metadata={"source": source})
 
@@ -201,8 +217,76 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
             logger.error(f"IntegrityError due to unique_bot_deduplication_key constraint violation creating bot: {e}")
             return None, {"error": "Deduplication key already in use. A bot in a non-terminal state with this deduplication key already exists. Please use a different deduplication key or wait for that bot to terminate."}
 
-        logger.error(f"Error creating bot: {e}")
-        return None, {"error": str(e)}
+        error_id = str(uuid.uuid4())
+        logger.error(f"Error creating bot (error_id={error_id}): {e}")
+        return None, {"error": f"An error occurred while creating the bot. Error ID: {error_id}"}
+
+
+def patch_bot(bot: Bot, data: dict) -> tuple[Bot | None, dict | None]:
+    """
+    Updates a scheduled bot with the provided data.
+
+    Args:
+        bot: The Bot instance to update
+        data: Dictionary containing the fields to update
+
+    Returns:
+        tuple: (updated_bot, error) where one is None
+    """
+    # Check if bot is in scheduled state
+    if bot.state != BotStates.SCHEDULED:
+        return None, {"error": f"Bot is in state {BotStates.state_to_api_code(bot.state)} but can only be updated when in scheduled state"}
+
+    # Validate the request data
+    serializer = PatchBotSerializer(data=data)
+    if not serializer.is_valid():
+        return None, serializer.errors
+
+    validated_data = serializer.validated_data
+
+    try:
+        # Update the bot
+        bot.join_at = validated_data.get("join_at", bot.join_at)
+        bot.meeting_url = validated_data.get("meeting_url", bot.meeting_url)
+        bot.save()
+
+        return bot, None
+
+    except ValidationError as e:
+        logger.error(f"ValidationError patching bot: {e}")
+        return None, {"error": e.messages[0]}
+    except Exception as e:
+        error_id = str(uuid.uuid4())
+        logger.error(f"Error patching bot (error_id={error_id}): {e}")
+        return None, {"error": f"An error occurred while patching the bot. Error ID: {error_id}"}
+
+
+def delete_bot(bot: Bot) -> tuple[bool, dict | None]:
+    """
+    Deletes a scheduled bot.
+
+    Args:
+        bot: The Bot instance to delete
+
+    Returns:
+        tuple: (success, error) where success is True if deletion succeeded,
+               and error is None on success or error dict on failure
+    """
+    # Check if bot is in scheduled state
+    if bot.state != BotStates.SCHEDULED:
+        return False, {"error": f"Bot is in state {BotStates.state_to_api_code(bot.state)} but can only be deleted when in scheduled state"}
+
+    try:
+        bot.delete()
+        return True, None
+
+    except ValidationError as e:
+        logger.error(f"ValidationError deleting bot: {e}")
+        return False, {"error": e.messages[0]}
+    except Exception as e:
+        error_id = str(uuid.uuid4())
+        logger.error(f"Error deleting bot (error_id={error_id}): {e}")
+        return False, {"error": f"An error occurred while deleting the bot. Error ID: {error_id}"}
 
 
 def validate_webhook_data(url, triggers, project, bot=None):
