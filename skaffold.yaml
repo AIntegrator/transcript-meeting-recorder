@@ -5,6 +5,10 @@ metadata:
 build:
   local:
     push: false # Set to true if you want to push images to a remote registry
+    useBuildkit: true
+  tagPolicy:
+    customTemplate:
+      template: "latest" # Call the image "latest" for development, this way the dynamically spun up pods will always use the latest code
   artifacts:
     - image: vanyabrucker/transcript
       docker:
