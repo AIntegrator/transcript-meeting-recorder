@@ -443,6 +443,8 @@ class GoogleMeetUIMethods:
 
         self.driver.get(self.meeting_url)
 
+        logger.info("Granting permissions for geolocation, audioCapture, displayCapture, and videoCapture...")
+
         self.driver.execute_cdp_cmd(
             "Browser.grantPermissions",
             {
