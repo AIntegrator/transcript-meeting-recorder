@@ -432,6 +432,7 @@ class WebBotAdapter(BotAdapter):
         )
 
     def init_driver(self):
+        logger.info("Initializing web driver...")
         options = webdriver.ChromeOptions()
 
         options.add_argument("--autoplay-policy=no-user-gesture-required")
@@ -472,6 +473,8 @@ class WebBotAdapter(BotAdapter):
             except Exception as e:
                 logger.info(f"Error closing existing driver: {e}")
             self.driver = None
+
+        logger.info(f"Starting web driver server with options: {options}...")
 
         self.driver = webdriver.Chrome(options=options)
         logger.info(f"web driver server initialized at port {self.driver.service.port}")
@@ -538,9 +541,10 @@ class WebBotAdapter(BotAdapter):
         num_retries = 0
         max_retries = 3
         while num_retries <= max_retries:
-            logger.info(f"Trying to join meeting for the {num_retries + 1} time.")
+            logger.info(f"Trying to join meeting for the {num_retries + 1} time. Max retries is set to: {max_retries}")
             try:
                 self.init_driver()
+                logger.info("Driver initialized. Attempting to join meeting...")
                 self.attempt_to_join_meeting()
                 logger.info("Successfully joined meeting")
                 break
