@@ -540,7 +540,7 @@ class WebBotAdapter(BotAdapter):
         num_expected_exceptions = 0
         num_retries = 0
         max_retries = 3
-        while num_retries <= max_retries:
+        while num_retries < max_retries:
             logger.info(f"Trying to join meeting for the {num_retries + 1} time. Max retries is set to: {max_retries}")
             try:
                 self.init_driver()
