@@ -435,7 +435,11 @@ class GoogleMeetUIMethods:
 
     # returns nothing if succeeded, raises an exception if failed
     def attempt_to_join_meeting(self):
+        logger.info("Attempting to join the meeting...")
         layout_to_select = self.get_layout_to_select()
+
+        logger.info("Navigating to the meeting URL...")
+        logger.info(f"Meeting URL: {self.meeting_url}")
 
         self.driver.get(self.meeting_url)
 
