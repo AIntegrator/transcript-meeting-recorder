@@ -230,7 +230,11 @@ class TeamsUIMethods:
     def attempt_to_join_meeting(self):
         if self.teams_bot_login_credentials:
             self.login_to_microsoft_account()
+        else:
+            logger.info("No teams bot login credentials provided, skipping login...")
+            logger.warning("The bot will most likely fail to join meeting. To use login, add Microsoft credentials in the UI and set 'teams_settings': {'use_login': true} in request.")
 
+        logger.info("Navigating to the meeting URL...")
         self.driver.get(self.meeting_url)
 
         self.driver.execute_cdp_cmd(
