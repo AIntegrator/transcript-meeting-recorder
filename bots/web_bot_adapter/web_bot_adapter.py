@@ -398,6 +398,7 @@ class WebBotAdapter(BotAdapter):
         Returns: None
 
         """
+        logger.info("Capturing debug screenshot...")
         current_time = datetime.datetime.now()
         timestamp = current_time.strftime("%Y%m%d_%H%M%S")
         screenshot_path = f"/tmp/ui_element_not_found_{timestamp}.png"
