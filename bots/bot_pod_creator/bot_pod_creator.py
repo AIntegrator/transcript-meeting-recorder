@@ -197,6 +197,7 @@ class BotPodCreator:
         bot_name: Optional[str] = None,
         bot_cpu_request: Optional[int] = None,
         add_webpage_streamer: Optional[bool] = False,
+        add_bot_dshm: Optional[bool] = True
     ) -> Dict:
         """
         Create a bot pod with configuration from environment.
@@ -204,6 +205,9 @@ class BotPodCreator:
         Args:
             bot_id: Integer ID of the bot to run
             bot_name: Optional name for the bot (will generate if not provided)
+            bot_cpu_request: Optional CPU request
+            add_webpage_streamer: Whether to deploy the sidecar pod
+            add_bot_dshm: If true, provisions a 2Gi /dev/shm for the bot pod
         """
         if bot_name is None:
             bot_name = f"bot-{bot_id}-{uuid.uuid4().hex[:8]}"
@@ -233,6 +237,35 @@ class BotPodCreator:
             annotations["karpenter.sh/do-not-disrupt"] = "true"
             annotations["karpenter.sh/do-not-evict"] = "true"
 
+        bot_containers = [self.get_bot_container()]
+        bot_volumes = []  # Start with an empty list
+
+        if add_bot_dshm:
+            logger.info(f"Adding 2Gi /dev/shm volume to bot pod {bot_name}")
+
+            # 1. Define the 2Gi shared memory volume
+            dshm_volume = client.V1Volume(
+                name="dshm",
+                empty_dir=client.V1EmptyDirVolumeSource(
+                    medium="Memory",
+                    size_limit="2Gi"
+                )
+            )
+
+            # 2. Define the mount for /dev/shm
+            dshm_volume_mount = client.V1VolumeMount(
+                name="dshm",  # Must match the volume name
+                mount_path="/dev/shm"
+            )
+
+            # 3. Add the volume to the pod's spec
+            bot_volumes.append(dshm_volume)
+
+            # 4. Add the mount to the container's spec
+            if bot_containers[0].volume_mounts is None:
+                bot_containers[0].volume_mounts = []
+            bot_containers[0].volume_mounts.append(dshm_volume_mount)
+
         bot_pod = client.V1Pod(
             metadata=client.V1ObjectMeta(
                 name=bot_name,
@@ -241,7 +274,8 @@ class BotPodCreator:
                 annotations=annotations
             ),
             spec=client.V1PodSpec(
-                containers=[self.get_bot_container()],
+                volumes=bot_volumes,
+                containers=bot_containers,
                 service_account_name=os.getenv("BOT_POD_SERVICE_ACCOUNT_NAME", "default"),
                 restart_policy="Never",
                 image_pull_secrets=self.get_pod_image_pull_secrets(),

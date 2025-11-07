@@ -444,7 +444,7 @@ class WebBotAdapter(BotAdapter):
         options.add_argument("--disable-gpu")
         options.add_argument("--disable-extensions")
         options.add_argument("--disable-application-cache")
-        options.add_argument("--disable-dev-shm-usage")
+        # options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
 
@@ -472,6 +472,8 @@ class WebBotAdapter(BotAdapter):
                 self.driver.quit()
             except Exception as e:
                 logger.info(f"Error closing existing driver: {e}")
+
+            # Explicitly set driver to None after quitting, so we don't hold a reference to a dead driver.
             self.driver = None
 
         logger.info(f"Starting web driver server with options: {options}...")
@@ -551,36 +553,44 @@ class WebBotAdapter(BotAdapter):
 
             except UiLoginRequiredException:
                 self.send_login_required_message()
+                self.close_and_quit_driver()
                 return
 
             except UiLoginAttemptFailedException:
                 self.send_login_attempt_failed_message()
+                self.close_and_quit_driver()
                 return
 
             except UiRequestToJoinDeniedException:
                 self.send_request_to_join_denied_message()
+                self.close_and_quit_driver()
                 return
 
             except UiCouldNotJoinMeetingWaitingRoomTimeoutException:
                 self.send_message_callback({"message": self.Messages.LEAVE_MEETING_WAITING_ROOM_TIMEOUT_EXCEEDED})
+                self.close_and_quit_driver()
                 return
 
             except UiCouldNotJoinMeetingWaitingForHostException:
                 self.send_message_callback({"message": self.Messages.LEAVE_MEETING_WAITING_FOR_HOST})
+                self.close_and_quit_driver()
                 return
 
             except UiMeetingNotFoundException:
                 self.send_meeting_not_found_message()
+                self.close_and_quit_driver()
                 return
 
             except UiIncorrectPasswordException:
                 self.send_incorrect_password_message()
+                self.close_and_quit_driver()
                 return
 
             except UiRetryableExpectedException as e:
                 if num_retries >= max_retries:
                     logger.info(f"Failed to join meeting and the {e.__class__.__name__} exception is retryable but the number of retries exceeded the limit and there were {num_expected_exceptions} expected exceptions, so returning")
                     self.send_debug_screenshot_message(step=e.step, exception=e, inner_exception=e.inner_exception)
+                    self.close_and_quit_driver()
                     return
 
                 num_expected_exceptions += 1
@@ -589,6 +599,7 @@ class WebBotAdapter(BotAdapter):
                     logger.info(f"Failed to join meeting and the {e.__class__.__name__} exception is expected and {num_expected_exceptions} expected exceptions have occurred, so incrementing num_retries. This usually indicates that the meeting has not started yet, so we will wait for the configured amount of time which is 180 seconds before retrying")
                     # We're going to start a new pod to see if that fixes the issue
                     self.send_message_callback({"message": self.Messages.BLOCKED_BY_PLATFORM_REPEATEDLY})
+                    self.close_and_quit_driver()
                     return
                 else:
                     logger.info(f"Failed to join meeting and the {e.__class__.__name__} exception is expected so not incrementing num_retries, but {num_expected_exceptions} expected exceptions have occurred")
@@ -597,10 +608,12 @@ class WebBotAdapter(BotAdapter):
                 if num_retries >= max_retries:
                     logger.info(f"Failed to join meeting and the {e.__class__.__name__} exception is retryable but the number of retries exceeded the limit, so returning")
                     self.send_debug_screenshot_message(step=e.step, exception=e, inner_exception=e.inner_exception)
+                    self.close_and_quit_driver()
                     return
 
                 if self.left_meeting or self.cleaned_up:
                     logger.info(f"Failed to join meeting and the {e.__class__.__name__} exception is retryable but the bot has left the meeting or cleaned up, so returning")
+                    self.close_and_quit_driver()
                     return
 
                 logger.info(f"Failed to join meeting and the {e.__class__.__name__} exception is retryable so retrying")
@@ -611,10 +624,12 @@ class WebBotAdapter(BotAdapter):
                 if num_retries >= max_retries:
                     logger.exception(f"Failed to join meeting and the unexpected {e.__class__.__name__} exception with message {e.__str__()} is retryable but the number of retries exceeded the limit, so returning.")
                     self.send_debug_screenshot_message(step="unknown", exception=e, inner_exception=None)
+                    self.close_and_quit_driver()
                     return
 
                 if self.left_meeting or self.cleaned_up:
                     logger.exception(f"Failed to join meeting and the unexpected {e.__class__.__name__} exception with message {e.__str__()} is retryable but the bot has left the meeting or cleaned up, so returning.")
+                    self.close_and_quit_driver()
                     return
 
                 logger.exception(f"Failed to join meeting and the unexpected {e.__class__.__name__} exception with message {e.__str__()} is retryable so retrying")
@@ -679,6 +694,22 @@ class WebBotAdapter(BotAdapter):
         except Exception as e:
             logger.info(f"Error closing driver: {e}")
 
+    def close_and_quit_driver(self):
+        logger.info("Closing window...")
+        if self.driver:
+            # Simulate closing browser window
+            try:
+                self.driver.close()
+            except Exception as e:
+                logger.info(f"Error closing driver: {e}")
+
+            # Then quit the driver
+            logger.info("Quitting driver...")
+            try:
+                self.driver.quit()
+            except Exception as e:
+                logger.info(f"Error quitting driver: {e}")
+
     def cleanup(self):
         if self.stop_recording_screen_callback:
             self.stop_recording_screen_callback()
@@ -697,18 +728,7 @@ class WebBotAdapter(BotAdapter):
                 sleep(0.5)
 
         try:
-            if self.driver:
-                # Simulate closing browser window
-                try:
-                    self.driver.close()
-                except Exception as e:
-                    logger.info(f"Error closing driver: {e}")
-
-                # Then quit the driver
-                try:
-                    self.driver.quit()
-                except Exception as e:
-                    logger.info(f"Error quitting driver: {e}")
+            self.close_and_quit_driver()
         except Exception as e:
             logger.info(f"Error during cleanup: {e}")
 
