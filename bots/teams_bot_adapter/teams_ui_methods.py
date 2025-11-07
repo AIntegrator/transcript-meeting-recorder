@@ -100,7 +100,7 @@ class TeamsUIMethods:
                 raise UiCouldNotLocateElementException("Could not find name input. Unknown error.", "name_input", e)
 
     def click_captions_button(self):
-        logger.info("Enabling closed captions programatically...")
+        logger.info("Enabling closed captions programmatically...")
         closed_caption_enable_result = self.driver.execute_script("return window.callManager?.enableClosedCaptions()")
         if closed_caption_enable_result:
             logger.info("Closed captions enabled programatically")
