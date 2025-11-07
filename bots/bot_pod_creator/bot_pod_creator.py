@@ -265,6 +265,8 @@ class BotPodCreator:
             if bot_containers[0].volume_mounts is None:
                 bot_containers[0].volume_mounts = []
             bot_containers[0].volume_mounts.append(dshm_volume_mount)
+        else:
+            logger.info(f"Not adding /dev/shm volume to bot pod {bot_name}. If run with Docker runtime, only 64 MB of /dev/shm will be available to Chrome driver which may lead to timeouts.")
 
         bot_pod = client.V1Pod(
             metadata=client.V1ObjectMeta(
