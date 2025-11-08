@@ -149,12 +149,15 @@ class TeamsUIMethods:
         num_attempts = self.automatic_leave_configuration.waiting_room_timeout_seconds * 10
         logger.info("Waiting for the show more button...")
         for attempt_index in range(num_attempts):
+            logger.info("attempt %d/%d looking for show-more button", attempt_index + 1, num_attempts)
             try:
                 show_more_button = WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.ID, "callingButtons-showMoreBtn")))
                 logger.info("Clicking the show more button...")
                 self.click_element(show_more_button, "click_show_more_button")
                 return
             except TimeoutException:
+                logger.info("Show-more button not found yet.")
+
                 self.look_for_sign_in_required_element("click_show_more_button")
                 self.look_for_denied_your_request_element("click_show_more_button")
                 self.look_for_we_could_not_connect_you_element("click_show_more_button")
@@ -162,7 +165,7 @@ class TeamsUIMethods:
                 self.check_if_waiting_room_timeout_exceeded(waiting_room_timeout_started_at, "click_show_more_button")
 
             except Exception as e:
-                logger.info("Exception raised in locate_element for show_more_button")
+                logger.exception("Unexpected error while locating show-more button")
                 raise UiCouldNotLocateElementException("Exception raised in locate_element for click_show_more_button", "click_show_more_button", e)
 
     def look_for_sign_in_required_element(self, step):
@@ -256,6 +259,7 @@ class TeamsUIMethods:
 
         logger.info("Waiting for the Join now button...")
         join_button = self.locate_element(step="join_button", condition=EC.presence_of_element_located((By.CSS_SELECTOR, '[data-tid="prejoin-join-button"]')), wait_time_seconds=10)
+        logger.info("Join now button located.")
         logger.info("Clicking the Join now button...")
         self.click_element(join_button, "join_button")
 
