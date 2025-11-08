@@ -2,6 +2,7 @@ services:
   recorder-worker:
     container_name: recorder-worker
     #build: ./transcript-meeting-recorder
+    platform: linux/amd64
     build:
       context: ./
       dockerfile: Dockerfile.dev
@@ -38,6 +39,7 @@ services:
   recorder-api:
     container_name: recorder-api
     #build: ./transcript-meeting-recorder
+    platform: linux/amd64
     build:
       context: ./
       dockerfile: Dockerfile.dev
