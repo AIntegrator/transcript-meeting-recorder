@@ -1251,6 +1251,8 @@ class BotController:
             logger.info(f"Debug recording file at {BotAdapter.DEBUG_RECORDING_FILE_PATH} does not exist, not saving")
             return
 
+        logger.info("Saving debug recording...")
+
         # Find the bot's last event
         last_bot_event = self.bot_in_db.last_bot_event()
         if last_bot_event:
@@ -1260,6 +1262,8 @@ class BotController:
             with open(BotAdapter.DEBUG_RECORDING_FILE_PATH, "rb") as f:
                 debug_screenshot.file.save(f"debug_screen_recording_{debug_screenshot.object_id}.mp4", f, save=True)
             logger.info(f"Saved debug recording with ID {debug_screenshot.object_id}")
+        else:
+            logger.info("No bot event found, cannot save debug recording")
 
     def on_message_from_websocket_audio(self, message_json: str):
         try:
