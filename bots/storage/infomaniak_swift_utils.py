@@ -1,7 +1,10 @@
 import os
+import logging
 
 from swiftclient import client
 from swiftclient.exceptions import ClientException
+
+logger = logging.getLogger(__name__)
 
 
 def get_swift_client():
@@ -30,6 +33,7 @@ def upload_file_to_swift(file_content_or_path, object_name):
         file_content_or_path: Either bytes content or path to file
         object_name: Name of the object in Swift storage
     """
+    logger.info(f"Uploading file to Swift storage: {object_name}...")
     swift_client = get_swift_client()
     container_name = get_container_name()
 
@@ -38,14 +42,16 @@ def upload_file_to_swift(file_content_or_path, object_name):
         if isinstance(file_content_or_path, str) and os.path.exists(file_content_or_path):
             # It's a file path
             with open(file_content_or_path, "rb") as file_obj:
-                swift_client.put_object(container_name, object_name, contents=file_obj)
+                contents=file_obj
         else:
             # It's content (bytes or string)
-            swift_client.put_object(container_name, object_name, contents=file_content_or_path)
+            contents = file_content_or_path
     else:
         # Assume it's a file path
         with open(file_content_or_path, "rb") as file_obj:
-            swift_client.put_object(container_name, object_name, contents=file_obj)
+            contents=file_obj
+
+    swift_client.put_object(container_name, object_name, contents=contents)
 
     return object_name
 
