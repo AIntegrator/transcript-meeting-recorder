@@ -403,6 +403,7 @@ class WebBotAdapter(BotAdapter):
         timestamp = current_time.strftime("%Y%m%d_%H%M%S")
         screenshot_path = f"/tmp/ui_element_not_found_{timestamp}.png"
         try:
+            logger.info(f"Saving debug screenshot to {screenshot_path}")
             self.driver.save_screenshot(screenshot_path)
         except Exception as e:
             logger.info(f"Error saving screenshot: {e}")
@@ -537,6 +538,9 @@ class WebBotAdapter(BotAdapter):
         repeatedly_attempt_to_join_meeting_thread.start()
 
     def repeatedly_attempt_to_join_meeting(self):
+        """
+        Repeatedly attempt to join the meeting with retries for expected exceptions.
+        """
         logger.info(f"Trying to join meeting at {self.meeting_url}")
 
         # Expected exceptions are ones that we expect to happen and are not a big deal, so we only increment num_retries once every three expected exceptions
@@ -634,6 +638,7 @@ class WebBotAdapter(BotAdapter):
                     return
 
                 logger.exception(f"Failed to join meeting and the unexpected {e.__class__.__name__} exception with message {e.__str__()} is retryable so retrying")
+                self.send_debug_screenshot_message(step="unknown", exception=e, inner_exception=None)
 
                 num_retries += 1
 
