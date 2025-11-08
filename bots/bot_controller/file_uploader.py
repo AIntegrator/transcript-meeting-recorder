@@ -28,6 +28,9 @@ class FileUploader:
             file_path (str): Path to the local file to upload
             callback (callable, optional): Function to call when upload completes
         """
+        logger.info(f"Starting upload of {file_path}...")
+        logger.info(f"Using container: {self.container}")
+        logger.info(f"Using client: {self.swift_client}")
         self._upload_thread = threading.Thread(target=self._upload_worker, args=(file_path, callback), daemon=True)
         self._upload_thread.start()
 
@@ -38,6 +41,7 @@ class FileUploader:
             file_path (str): Path to the local file to upload
             callback (callable, optional): Function to call when upload completes
         """
+        logger.info("Worker thread started for file upload...")
         try:
             file_path = Path(file_path)
             if not file_path.exists():
@@ -52,7 +56,7 @@ class FileUploader:
                 callback(True)
 
         except Exception as e:
-            logger.error(f"Upload error: {e}")
+            logger.error(f"Worker failed wih upload, error: {e}")
             if callback:
                 callback(False)
 
