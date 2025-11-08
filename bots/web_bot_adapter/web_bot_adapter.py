@@ -656,6 +656,12 @@ class WebBotAdapter(BotAdapter):
         self.send_message_callback({"message": self.Messages.BOT_RECORDING_PERMISSION_DENIED, "denied_reason": BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_DENIED_PERMISSION})
 
     def after_bot_can_record_meeting(self):
+        """
+        Called after the bot is granted permission to record the meeting.
+
+        This method sets up the recording environment, notifies the system of the granted permission,
+        and starts media sending and streaming processes.
+        """
         if self.recording_permission_granted_at is not None:
             return
 
