@@ -37,23 +37,20 @@ def upload_file_to_swift(file_content_or_path, object_name):
     swift_client = get_swift_client()
     container_name = get_container_name()
 
-    if isinstance(file_content_or_path, (bytes, str)):
-        # If it's bytes or string content, upload directly
+    try:
         if isinstance(file_content_or_path, str) and os.path.exists(file_content_or_path):
             # It's a file path
             with open(file_content_or_path, "rb") as file_obj:
-                contents=file_obj
+                swift_client.put_object(container_name, object_name, contents=file_obj)
         else:
-            # It's content (bytes or string)
-            contents = file_content_or_path
-    else:
-        # Assume it's a file path
-        with open(file_content_or_path, "rb") as file_obj:
-            contents=file_obj
+            # It's content (bytes or string) or a file-like object
+            swift_client.put_object(container_name, object_name, contents=file_content_or_path)
 
-    swift_client.put_object(container_name, object_name, contents=contents)
-
-    return object_name
+        logger.info(f"Successfully uploaded {object_name} to Swift container {container_name}")
+        return object_name
+    except Exception as e:
+        logger.error(f"Failed to upload {object_name} to Swift: {e}")
+        raise
 
 
 def delete_file_from_swift(object_name):
