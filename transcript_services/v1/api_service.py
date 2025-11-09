@@ -54,6 +54,8 @@ def start_transcription(transcript_uuid):
 
 
 def could_not_record(transcript_id):
+    logger.error(f"Could not record for transcript ID: {transcript_id}")
+
     # API credentials
     api_key = os.getenv("TRANSCRIPT_API_KEY")
 
