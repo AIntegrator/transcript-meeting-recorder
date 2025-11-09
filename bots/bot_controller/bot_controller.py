@@ -348,6 +348,9 @@ class BotController:
             return int(self.gstreamer_pipeline.start_time_ns / 1_000_000) + self.adapter.get_first_buffer_timestamp_ms_offset()
 
     def recording_file_saved(self, s3_storage_key):
+        """
+        Called when the recording file has been successfully saved to S3. Updates the Recording object in the database.
+        """
         recording = Recording.objects.get(bot=self.bot_in_db, is_default_recording=True)
         recording.file = s3_storage_key
         recording.first_buffer_timestamp_ms = self.get_first_buffer_timestamp_ms()
@@ -461,19 +464,29 @@ class BotController:
             )
             file_uploader.upload_file(self.get_recording_file_location())
             file_uploader.wait_for_upload()
-            logger.info("File uploader finished uploading file")
 
-            # After a successful upload, call the Transcript API to transcribe the file
-            logger.info("Transcript ID: %s", transcript_id)
-            try:
-                logger.info("Sending transcription request...")
-                transcript_api_service.start_transcription(transcript_id)
-            except Exception as e:
-                logger.error(e)
+            if file_uploader.upload_success:
+                logger.info("File uploader finished uploading file successfully.")
 
-            file_uploader.delete_file(self.get_recording_file_location())
-            logger.info("File uploader deleted file from local filesystem")
-            self.recording_file_saved(file_uploader.key)
+                # After a successful upload, call the Transcript API to transcribe the file
+                logger.info("Transcript ID: %s", transcript_id)
+                try:
+                    logger.info("Sending transcription request...")
+                    transcript_api_service.start_transcription(transcript_id)
+                except Exception as e:
+                    logger.error(e)
+                finally:
+                    file_uploader.delete_file(self.get_recording_file_location())
+                    logger.info("File uploader deleted file from local filesystem")
+
+                # Update the Recording object in the database to point to the uploaded file
+                self.recording_file_saved(file_uploader.key)
+            else:
+                logger.error("File uploader failed to upload file. Not starting transcription or deleting local file.")
+                try:
+                    transcript_api_service.could_not_record(transcript_id)
+                except Exception as e:
+                    logger.error(f"Could not call could_not_record API: {e}")
 
         if self.bot_in_db.state == BotStates.POST_PROCESSING:
             self.wait_until_all_utterances_are_terminated()
