@@ -2245,6 +2245,9 @@ class BotDebugScreenshot(models.Model):
             # Generate a random 16-character string
             random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
             self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
+
+        logger.info(f"Saving bot debug screenshot {self.object_id}...")
+
         super().save(*args, **kwargs)
 
     @property
