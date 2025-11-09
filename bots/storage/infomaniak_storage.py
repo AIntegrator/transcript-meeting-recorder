@@ -1,10 +1,13 @@
 import os
+import logging
 
 from django.core.files.base import ContentFile
 from django.core.files.storage import Storage
 from django.utils.deconstruct import deconstructible
 from swiftclient import client
 from swiftclient.exceptions import ClientException
+
+logger = logging.getLogger(__name__)
 
 
 @deconstructible
@@ -44,8 +47,22 @@ class InfomaniakSwiftStorage(Storage):
             raise
 
     def _save(self, name, content):
-        content.seek(0)
-        self.connection.put_object(self.container_name, name, contents=content, content_type=getattr(content, "content_type", "application/octet-stream"))
+        try:
+            content.seek(0)
+        except (AttributeError, OSError, ValueError):
+            # non-seekable or closed; proceed without seeking
+            pass
+        try:
+            self.connection.put_object(
+                self.container_name,
+                name,
+                contents=content,
+                content_type=getattr(content, "content_type", "application/octet-stream"),
+            )
+        except ClientException as e:
+            # Raise the original swiftclient exception to be handled upstream
+            raise e
+
         return name
 
     def delete(self, name):
@@ -58,11 +75,16 @@ class InfomaniakSwiftStorage(Storage):
                 raise
 
     def exists(self, name):
+        """
+        Check if the object exists in the Swift container. This is automatically called by Django's storage system.
+        """
         try:
-            self.connection.get_object(self.container_name, name, resp_chunk_size=1)
+            logger.info(f"Checking if object {name} exists in container {self.container_name}...")
+            self.connection.head_object(self.container_name, name)
             return True
         except ClientException as e:
             if e.http_status == 404:
+                logger.info(f"Object {name} not found in container {self.container_name}")
                 return False
             raise
 
