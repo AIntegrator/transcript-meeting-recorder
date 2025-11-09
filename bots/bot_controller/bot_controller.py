@@ -438,6 +438,9 @@ class BotController:
             logger.info("Telling websocket audio client to cleanup...")
             self.websocket_audio_client.cleanup()
 
+        if self.bot_in_db.create_debug_recording():
+            self.save_debug_recording()
+
         if self.get_recording_file_location():
             logger.info("Telling file uploader to upload recording file...")
             logger.info("file_name: %s", self.get_recording_filename())
@@ -471,9 +474,6 @@ class BotController:
             file_uploader.delete_file(self.get_recording_file_location())
             logger.info("File uploader deleted file from local filesystem")
             self.recording_file_saved(file_uploader.key)
-
-        if self.bot_in_db.create_debug_recording():
-            self.save_debug_recording()
 
         if self.bot_in_db.state == BotStates.POST_PROCESSING:
             self.wait_until_all_utterances_are_terminated()
@@ -1246,12 +1246,12 @@ class BotController:
             self.closed_caption_manager.flush_captions()
 
     def save_debug_recording(self):
+        logger.info("Saving debug recording...")
+
         # Only save if the file exists
         if not os.path.exists(BotAdapter.DEBUG_RECORDING_FILE_PATH):
             logger.info(f"Debug recording file at {BotAdapter.DEBUG_RECORDING_FILE_PATH} does not exist, not saving")
             return
-
-        logger.info("Saving debug recording...")
 
         # Find the bot's last event
         last_bot_event = self.bot_in_db.last_bot_event()
