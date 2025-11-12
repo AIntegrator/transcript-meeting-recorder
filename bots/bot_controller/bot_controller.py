@@ -366,8 +366,8 @@ class BotController:
         recording = Recording.objects.get(bot=self.bot_in_db, is_default_recording=True)
 
         # If the recording has a file name, use it; otherwise, use the object ID
-        if recording.file_name:
-            return f"{recording.file_name}.{self.bot_in_db.recording_format()}"
+        if recording.bot.settings.get("recording_file_name", None) is not None:
+            return f"{recording.bot.settings.get('recording_file_name', None)}.{self.bot_in_db.recording_format()}"
         else:
             return f"{recording.object_id}.{self.bot_in_db.recording_format()}"
 
@@ -446,7 +446,7 @@ class BotController:
 
         if self.get_recording_file_location():
             logger.info("Telling file uploader to upload recording file...")
-            logger.info("file_name: %s", self.get_recording_filename())
+            logger.info("recording_file_name: %s", self.get_recording_filename())
 
             # Get the transcript ID from the recording filename
             transcript_id = self.get_recording_filename().split(".")[0]

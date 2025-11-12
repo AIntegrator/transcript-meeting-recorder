@@ -1539,9 +1539,6 @@ class Recording(models.Model):
 
     is_default_recording = models.BooleanField(default=False)
 
-    # This is the name of the file that will be uploaded to Infomaniak Swift
-    file_name = models.CharField(max_length=255, null=False, blank=False)
-
     state = models.IntegerField(choices=RecordingStates.choices, default=RecordingStates.NOT_STARTED, null=False)
 
     transcription_state = models.IntegerField(

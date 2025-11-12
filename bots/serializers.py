@@ -829,7 +829,6 @@ class CreateAsyncTranscriptionSerializer(serializers.Serializer):
 class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
     meeting_url = serializers.CharField(help_text="The URL of the meeting to join, e.g. https://zoom.us/j/123?pwd=456")
     bot_name = serializers.CharField(help_text="The name of the bot to create, e.g. 'My Bot'")
-    file_name = serializers.CharField(help_text="The name of the file to create, e.g. 'example_file_name' will create 'example_file_name.mp4'", default=None)
     bot_image = BotImageSerializer(help_text="The image for the bot", required=False, default=None)
     metadata = MetadataJSONField(help_text="JSON object containing metadata to associate with the bot", required=False, default=None)
     recording_file_name = serializers.CharField(help_text="Optional custom filename for the recording. If provided, this will be used instead of generating a filename from meeting metadata. The filename should not include an extension as it will be added automatically based on the recording format.", required=False, default=None, allow_blank=True)
@@ -1040,26 +1039,6 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
         if meeting_type == MeetingTypes.GOOGLE_MEET:
             if not value.startswith("https://meet.google.com/"):
                 raise serializers.ValidationError("Google Meet URL must start with https://meet.google.com/")
-
-        return value
-
-    def validate_file_name(self, value):
-        # None is legal but redundant because default value is also None
-        if value is None:
-            return value
-
-        # File name must be a string
-        if not isinstance(value, str):
-            raise serializers.ValidationError({"file_name": "File name must be a string"})
-
-        # File name must be less than 255 characters
-        if len(value) > 255:
-            raise serializers.ValidationError({"file_name": "File name must be less than 255 characters"})
-
-        # Validate that url is a proper URL
-        url = value.get("url")
-        if url and not url.lower().startswith("https://"):
-            raise serializers.ValidationError({"url": "URL must start with https://"})
 
         return value
 
