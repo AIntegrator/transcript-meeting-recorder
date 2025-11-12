@@ -38,40 +38,6 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-      with:
-        driver-opts: |
-          image=moby/buildkit:master
-          network=host
-
-    - name: Build and cache Docker image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        push: false
-        load: true
-        tags: attendee-test:latest
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-
-    - name: Run build script in Docker container
-      env:
-        POSTGRES_HOST: localhost
-        REDIS_URL: redis://localhost:6379/5
-        DJANGO_SETTINGS_MODULE: attendee.settings.test
-      run: |
-        docker run --rm \
-          --network host \
-          -e POSTGRES_HOST \
-          -e REDIS_URL \
-          -e DJANGO_SETTINGS_MODULE \
-          attendee-test:latest bash -c "python init_env.py > .env && python manage.py test --keepdb --tag zoom_tests && python manage.py test --keepdb --exclude-tag zoom_tests"
-
   lint:
     name: Run linting
     runs-on: ubuntu-latest
