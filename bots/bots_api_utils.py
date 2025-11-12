@@ -165,6 +165,7 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
     # Only include recording_file_name if it's not None or empty
     if recording_file_name:
         settings["recording_file_name"] = recording_file_name
+        logger.info("Creating bot with recording file name: " + recording_file_name)
 
     logger.info("Creating bot with settings: " + str(settings))
 
