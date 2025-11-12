@@ -20,6 +20,7 @@ class FileUploader:
         self.container = get_container_name()  # Use the configured container name
         self.key = key
         self._upload_thread = None
+        self.upload_success = None
 
     def upload_file(self, file_path: str, callback=None):
         """Start an asynchronous upload of a file to Swift.
@@ -28,6 +29,9 @@ class FileUploader:
             file_path (str): Path to the local file to upload
             callback (callable, optional): Function to call when upload completes
         """
+        logger.info(f"Starting upload of {file_path}...")
+        logger.info(f"Using container: {self.container}")
+        logger.info(f"Using client: {self.swift_client}")
         self._upload_thread = threading.Thread(target=self._upload_worker, args=(file_path, callback), daemon=True)
         self._upload_thread.start()
 
@@ -38,6 +42,7 @@ class FileUploader:
             file_path (str): Path to the local file to upload
             callback (callable, optional): Function to call when upload completes
         """
+        logger.info("Worker thread started for file upload...")
         try:
             file_path = Path(file_path)
             if not file_path.exists():
@@ -47,12 +52,17 @@ class FileUploader:
             upload_file_to_swift(str(file_path), self.key)
 
             logger.info(f"Successfully uploaded {file_path} to swift://{self.container}/{self.key}")
+            self.upload_success = True
 
+            # Invoke the callback with True on success
             if callback:
                 callback(True)
 
         except Exception as e:
-            logger.error(f"Upload error: {e}")
+            logger.error(f"Worker failed wih upload, error: {e}")
+            self.upload_success = False
+
+            # If there was an error, invoke the callback with False
             if callback:
                 callback(False)
 

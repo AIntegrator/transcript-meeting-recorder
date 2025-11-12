@@ -1,0 +1,36 @@
+apiVersion: skaffold/v4beta13
+kind: Config
+metadata:
+  name: transcript-meeting-recorder
+build:
+  local:
+    push: false # Set to true if you want to push images to a remote registry
+    useBuildkit: true
+  tagPolicy:
+    customTemplate:
+      template: "latest" # Call the image "latest" for development, this way the dynamically spun up pods will always use the latest code
+  artifacts:
+    - image: vanyabrucker/transcript
+      docker:
+        dockerfile: Dockerfile.dev
+      sync:
+        infer:
+          - 'transcript_meeting_recorder/**/*.py'
+          - 'transcript_meeting_recorder/**/*.html'
+          - 'transcript_meeting_recorder/static/**/*'
+          - '/Users/vanyabrucker/src/transcript-k8s/dev/deployment-meeting-recorder-api-dev.yaml'
+manifests:
+  rawYaml:
+    - /Users/vanyabrucker/src/transcript-k8s/dev/deployment-meeting-recorder-api-dev.yaml
+    - /Users/vanyabrucker/src/transcript-k8s/secret-transcript.yaml
+    - /Users/vanyabrucker/src/transcript-k8s/secret-docker.yaml
+    - /Users/vanyabrucker/src/transcript-k8s/configmap-transcript.yaml
+    - /Users/vanyabrucker/src/transcript-k8s/role-meeting-recorder-bot.yaml
+deploy:
+  kubectl: {}
+portForward:
+  - resourceType: Service
+    resourceName: transcript-meeting-recorder-api # Name of the Kubernetes Service
+    namespace: default
+    port: 80 # The port the service exposes
+    localPort: 8000 # The local port you want to access it on

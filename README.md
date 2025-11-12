@@ -9,17 +9,47 @@ The meeting recorder is a clone of the open source repository 'attendee' by Noah
 - Build the Docker image: `docker compose -f dev.docker-compose.yml build` (Takes about 5 minutes)
 - Create local environment variables: `docker compose -f dev.docker-compose.yml run --rm recorder-api python init_env.py > .env`
 - Edit the `.env` file and enter your AWS information.
-- Start all the services: `docker compose -f dev.docker-compose.yaml up`
-- After the services have started, run migrations in a separate terminal tab: `docker compose -f dev.docker-compose.yaml exec attendee-app-local python manage.py migrate`
+- Start all the services: `docker compose -f dev.docker-compose.yml up`
+- After the services have started, run migrations in a separate terminal tab: `docker compose -f dev.docker-compose.yml exec recorder-api python manage.py migrate`
 - Go to localhost:8001 in your browser and create an account
 - The confirmation link will be written to the server logs in the terminal where you ran `docker compose -f dev.docker-compose.yml up`. Should look like `http://localhost:8001/accounts/confirm-email/<key>/`.
 - Paste the link into your browser to confirm your account.
 - You should now be able to log in, input your credentials and obtain an API key. API calls should be directed to http://localhost:8000.
 
+## Running in dev mode with skaffold
+
+- Install skaffold: `brew install skaffold`
+- Install Docker Desktop: https://www.docker.com/products/docker-desktop
+- Start Docker Desktop with Kubernetes enabled and ensure you are in the desktop context: `kubectl config current-context`
+- Clone the transcript-k8s repository for the k8s manifests.
+- Populate the skaffold config file (`skaffold.yaml`) with your local k8s manifests path, e.g.:
+  - ```yaml
+    manifests:
+        rawYaml:
+        - /Users/USERNAME/K8S_REPO_PATH/transcript-k8s/deployment-meeting-recorder-api-dev.yaml)
+    ```
+- Create and populate the docker and transcript secrets files:
+  - `cp ./secret-examples/secret-docker.yaml secret-docker.yaml`
+  - `cp ./secret-examples/secret-transcript.yaml secret-transcript.yaml`
+- Apply the secrets to your Kubernetes cluster:
+  - `kubectl apply -f secret-docker.yaml`
+  - `kubectl apply -f secret-transcript.yaml`
+- Apply the configmap:
+  - `kubectl apply -f configmap-transcript.yaml`
+- Start the dependencies: `kubectl apply -f deployment-redis.yaml`, `kubectl apply -f deployment-postgres.yaml`, `kubectl apply -f role-meeting-recorder-bot.yaml`
+- Run skaffold in dev mode: `skaffold dev`
+
+## Create and apply migrations
+
+- Make your model changes in the Django app. See defined app in attendee/setting/base.py, e.g. `base.py`.
+- Run the app with `docker-compose -f dev.docker-compose.yml up` 
+- In a separate terminal window create the migrations for e.g. the ´bots´ app with `docker compose -f dev.docker-compose.yml exec recorder-api python manage.py makemigrations bots` 
+- To apply migrations to the database, run `docker compose -f dev.docker-compose.yml exec recorder-api python manage.py migrate`
+
 ## Deployment
 
-- Build the Docker image: `docker build --platform=linux/amd64 -t vanyabrucker/transcript:transcript-meeting-recorder_1.0.1_staging -f Dockerfile .` (Takes about 5 minutes)
-- Push the image to Docker Hub: `docker push vanyabrucker/transcript:transcript-meeting-recorder_1.0.1_staging`
+- Build the Docker image: `docker build --platform=linux/amd64 -t vanyabrucker/transcript-meeting-recorder:1.0.32 -f Dockerfile.dev .` (Takes about 5 minutes)
+- Push the image to Docker Hub: `docker push vanyabrucker/transcript-meeting-recorder:1.0.32`
 
 
 ## Calling the API

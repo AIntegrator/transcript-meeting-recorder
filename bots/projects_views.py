@@ -1,18 +1,26 @@
 import base64
+import json
 import logging
 import math
 import os
+import uuid
 
 import stripe
+from allauth.account.utils import send_email_confirmation
 from django.conf import settings
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.db import models
-from django.http import HttpResponse
+from django.core.exceptions import PermissionDenied, ValidationError
+from django.db import models, transaction
+from django.http import HttpResponse, QueryDict
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views import View
-from django.views.generic.list import ListView
+from django.views.generic import ListView
 
+from accounts.models import User, UserRole
+
+from .bots_api_utils import BotCreationSource, create_bot, create_webhook_subscription
+from .launch_bot_utils import launch_bot
 from .models import (
     ApiKey,
     Bot,
@@ -20,10 +28,17 @@ from .models import (
     BotEventSubTypes,
     BotEventTypes,
     BotStates,
+    ChatMessage,
     Credentials,
     CreditTransaction,
+    Participant,
+    ParticipantEventTypes,
     Project,
+    ProjectAccess,
+    Recording,
     RecordingStates,
+    RecordingTranscriptionStates,
+    RecordingTypes,
     Utterance,
     WebhookDeliveryAttempt,
     WebhookDeliveryAttemptStatus,
@@ -37,18 +52,63 @@ from .utils import generate_recordings_json_for_bot_detail_view
 logger = logging.getLogger(__name__)
 
 
+def get_project_for_user(user, project_object_id):
+    project = get_object_or_404(Project, object_id=project_object_id, organization=user.organization)
+    # If you're an admin you can access any project in the organization
+    if user.role != UserRole.ADMIN and not ProjectAccess.objects.filter(project=project, user=user).exists():
+        raise PermissionDenied
+    return project
+
+
+def get_webhook_subscription_for_user(user, webhook_subscription_object_id):
+    webhook_subscription = get_object_or_404(WebhookSubscription, object_id=webhook_subscription_object_id, project__organization=user.organization)
+    # If you're an admin you can access any webhook subscription in the organization
+    if user.role != UserRole.ADMIN and not ProjectAccess.objects.filter(project=webhook_subscription.project, user=user).exists():
+        raise PermissionDenied
+    return webhook_subscription
+
+
+def get_api_key_for_user(user, api_key_object_id):
+    api_key = get_object_or_404(ApiKey, object_id=api_key_object_id, project__organization=user.organization)
+    # If you're an admin you can access any api key in the organization
+    if user.role != UserRole.ADMIN and not ProjectAccess.objects.filter(project=api_key.project, user=user).exists():
+        raise PermissionDenied
+    return api_key
+
+
+class AdminRequiredMixin(LoginRequiredMixin):
+    """
+    Mixin for class-based views that can only be accessed by admin users.
+    Inherits from LoginRequiredMixin to ensure user is authenticated first.
+    """
+
+    def dispatch(self, request, *args, **kwargs):
+        # First check if user is authenticated (handled by LoginRequiredMixin)
+        if not request.user.is_authenticated:
+            return self.handle_no_permission()
+
+        # Then check if user is admin
+        if request.user.role != UserRole.ADMIN:
+            raise PermissionDenied("Only administrators can access this resource.")
+
+        return super().dispatch(request, *args, **kwargs)
+
+
 class ProjectUrlContextMixin:
     def get_project_context(self, object_id, project):
         return {
             "project": project,
             "charge_credits_for_bots_setting": settings.CHARGE_CREDITS_FOR_BOTS,
+            "user_projects": Project.accessible_to(self.request.user),
+            "UserRole": UserRole,
+            "debug_mode": True if settings.DEBUG else False,
         }
 
 
 class ProjectDashboardView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def get(self, request, object_id):
         try:
-            project = get_object_or_404(Project, object_id=object_id, organization=request.user.organization)
+            project = get_project_for_user(user=request.user, project_object_id=object_id)
         except:
             return redirect("/")
 
@@ -61,6 +121,8 @@ class ProjectDashboardView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
         has_ended_bots = Bot.objects.filter(project=project, state=BotStates.ENDED).exists()
 
+        has_created_bots_via_api = BotEvent.objects.filter(bot__project=project, event_type=BotEventTypes.JOIN_REQUESTED, metadata__source=BotCreationSource.API).exists()
+
         context = self.get_project_context(object_id, project)
         context.update(
             {
@@ -68,6 +130,7 @@ class ProjectDashboardView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                     "has_credentials": zoom_credentials and deepgram_credentials,
                     "has_api_keys": has_api_keys,
                     "has_ended_bots": has_ended_bots,
+                    "has_created_bots_via_api": has_created_bots_via_api,
                 }
             }
         )
@@ -77,7 +140,7 @@ class ProjectDashboardView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
 class ProjectApiKeysView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def get(self, request, object_id):
-        project = get_object_or_404(Project, object_id=object_id, organization=request.user.organization)
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
         context = self.get_project_context(object_id, project)
         context["api_keys"] = ApiKey.objects.filter(project=project).order_by("-created_at")
         return render(request, "projects/project_api_keys.html", context)
@@ -85,7 +148,7 @@ class ProjectApiKeysView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
 class CreateApiKeyView(LoginRequiredMixin, View):
     def post(self, request, object_id):
-        project = get_object_or_404(Project, object_id=object_id, organization=request.user.organization)
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
         name = request.POST.get("name")
 
         if not name:
@@ -103,11 +166,7 @@ class CreateApiKeyView(LoginRequiredMixin, View):
 
 class DeleteApiKeyView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def delete(self, request, object_id, key_object_id):
-        api_key = get_object_or_404(
-            ApiKey,
-            object_id=key_object_id,
-            project__organization=request.user.organization,
-        )
+        api_key = get_api_key_for_user(user=request.user, api_key_object_id=key_object_id)
         api_key.delete()
         context = self.get_project_context(object_id, api_key.project)
         context["api_keys"] = ApiKey.objects.filter(project=api_key.project).order_by("-created_at")
@@ -121,7 +180,7 @@ class RedirectToDashboardView(LoginRequiredMixin, View):
 
 class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def post(self, request, object_id):
-        project = get_object_or_404(Project, object_id=object_id, organization=request.user.organization)
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
 
         try:
             credential_type = int(request.POST.get("credential_type"))
@@ -156,10 +215,35 @@ class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
                 if not all(credentials_data.values()):
                     return HttpResponse("Missing required credentials data", status=400)
+            elif credential_type == Credentials.CredentialTypes.ASSEMBLY_AI:
+                credentials_data = {"api_key": request.POST.get("api_key")}
+
+                if not all(credentials_data.values()):
+                    return HttpResponse("Missing required credentials data", status=400)
+            elif credential_type == Credentials.CredentialTypes.SARVAM:
+                credentials_data = {"api_key": request.POST.get("api_key")}
+
+                if not all(credentials_data.values()):
+                    return HttpResponse("Missing required credentials data", status=400)
+            elif credential_type == Credentials.CredentialTypes.ELEVENLABS:
+                credentials_data = {"api_key": request.POST.get("api_key")}
+
+                if not all(credentials_data.values()):
+                    return HttpResponse("Missing required credentials data", status=400)
             elif credential_type == Credentials.CredentialTypes.GOOGLE_TTS:
                 credentials_data = {"service_account_json": request.POST.get("service_account_json")}
 
                 if not all(credentials_data.values()):
+                    return HttpResponse("Missing required credentials data", status=400)
+            elif credential_type == Credentials.CredentialTypes.TEAMS_BOT_LOGIN:
+                credentials_data = {"username": request.POST.get("username"), "password": request.POST.get("password")}
+
+                if not all(credentials_data.values()):
+                    return HttpResponse("Missing required credentials data", status=400)
+            elif credential_type == Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE:
+                credentials_data = {"access_key_id": request.POST.get("access_key_id"), "access_key_secret": request.POST.get("access_key_secret"), "endpoint_url": request.POST.get("endpoint_url"), "region_name": request.POST.get("region_name")}
+
+                if not credentials_data.get("access_key_id") or not credentials_data.get("access_key_secret") or (not credentials_data.get("endpoint_url") and not credentials_data.get("region_name")):
                     return HttpResponse("Missing required credentials data", status=400)
             else:
                 return HttpResponse("Unsupported credential type", status=400)
@@ -179,8 +263,14 @@ class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 return render(request, "projects/partials/gladia_credentials.html", context)
             elif credential.credential_type == Credentials.CredentialTypes.OPENAI:
                 return render(request, "projects/partials/openai_credentials.html", context)
+            elif credential.credential_type == Credentials.CredentialTypes.ASSEMBLY_AI:
+                return render(request, "projects/partials/assembly_ai_credentials.html", context)
+            elif credential.credential_type == Credentials.CredentialTypes.SARVAM:
+                return render(request, "projects/partials/sarvam_credentials.html", context)
             elif credential.credential_type == Credentials.CredentialTypes.GOOGLE_TTS:
                 return render(request, "projects/partials/google_tts_credentials.html", context)
+            elif credential.credential_type == Credentials.CredentialTypes.TEAMS_BOT_LOGIN:
+                return render(request, "projects/partials/teams_bot_login_credentials.html", context)
             else:
                 return HttpResponse("Cannot render the partial for this credential type", status=400)
 
@@ -190,7 +280,7 @@ class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
 class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def get(self, request, object_id):
-        project = get_object_or_404(Project, object_id=object_id, organization=request.user.organization)
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
 
         # Try to get existing credentials
         zoom_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.ZOOM_OAUTH).first()
@@ -202,6 +292,12 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         openai_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.OPENAI).first()
 
         google_tts_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.GOOGLE_TTS).first()
+
+        assembly_ai_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.ASSEMBLY_AI).first()
+
+        sarvam_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.SARVAM).first()
+
+        teams_bot_login_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.TEAMS_BOT_LOGIN).first()
 
         context = self.get_project_context(object_id, project)
         context.update(
@@ -216,6 +312,12 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 "gladia_credential_type": Credentials.CredentialTypes.GLADIA,
                 "openai_credentials": openai_credentials.get_credentials() if openai_credentials else None,
                 "openai_credential_type": Credentials.CredentialTypes.OPENAI,
+                "assembly_ai_credentials": assembly_ai_credentials.get_credentials() if assembly_ai_credentials else None,
+                "assembly_ai_credential_type": Credentials.CredentialTypes.ASSEMBLY_AI,
+                "sarvam_credentials": sarvam_credentials.get_credentials() if sarvam_credentials else None,
+                "sarvam_credential_type": Credentials.CredentialTypes.SARVAM,
+                "teams_bot_login_credentials": teams_bot_login_credentials.get_credentials() if teams_bot_login_credentials else None,
+                "teams_bot_login_credential_type": Credentials.CredentialTypes.TEAMS_BOT_LOGIN,
             }
         )
 
@@ -228,7 +330,7 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
     paginate_by = 20
 
     def get_queryset(self):
-        project = get_object_or_404(Project, object_id=self.kwargs["object_id"], organization=self.request.user.organization)
+        project = get_project_for_user(user=self.request.user, project_object_id=self.kwargs["object_id"])
 
         # Start with the base queryset
         queryset = Bot.objects.filter(project=project)
@@ -282,128 +384,284 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        project = get_object_or_404(Project, object_id=self.kwargs["object_id"], organization=self.request.user.organization)
+        project = get_project_for_user(user=self.request.user, project_object_id=self.kwargs["object_id"])
         context.update(self.get_project_context(self.kwargs["object_id"], project))
 
         # Add BotStates for the template
         context["BotStates"] = BotStates
 
         # Add filter parameters to context for maintaining state
-        context["filter_params"] = {"start_date": self.request.GET.get("start_date", ""), "end_date": self.request.GET.get("end_date", ""), "states": self.request.GET.getlist("states")}
+        context["filter_params"] = {"start_date": self.request.GET.get("start_date", ""), "end_date": self.request.GET.get("end_date", ""), "states": self.request.GET.getlist("states"), "search": self.request.GET.get("search", "")}
+
+        # Add flag to detect if create modal should be automatically opened
+        context["open_create_modal"] = self.request.GET.get("open_create_modal") == "true"
+
+        # Check if any bots in the current page have a join_at value
+        context["has_scheduled_bots"] = any(bot.join_at is not None for bot in context["bots"])
 
         return context
 
 
 class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def get(self, request, object_id, bot_object_id):
-        project = get_object_or_404(Project, object_id=object_id, organization=request.user.organization)
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
 
-        bot = get_object_or_404(Bot, object_id=bot_object_id, project=project)
+        try:
+            bot = (
+                Bot.objects.select_related()
+                .prefetch_related(
+                    "bot_events__debug_screenshots",
+                )
+                .get(object_id=bot_object_id, project=project)
+            )
+        except Bot.DoesNotExist:
+            # Redirect to bots list if bot not found
+            return redirect("bots:project-bots", object_id=object_id)
 
-        # Prefetch recordings with their utterances and participants
-        bot.recordings.all().prefetch_related(models.Prefetch("utterances", queryset=Utterance.objects.select_related("participant")))
-
-        # Prefetch bot events with their debug screenshots
-        bot.bot_events.prefetch_related("debug_screenshots")
-
-        # Get webhook delivery attempts for this bot
+        # Get webhook delivery attempts for this bot (from both project-level and bot-specific webhook subscriptions)
         webhook_delivery_attempts = WebhookDeliveryAttempt.objects.filter(bot=bot).select_related("webhook_subscription").order_by("-created_at")
+
+        # Get chat messages for this bot
+        chat_messages = ChatMessage.objects.filter(bot=bot).select_related("participant").order_by("created_at")
+
+        # Get participants and participant events for this bot
+        participants = Participant.objects.filter(bot=bot, is_the_bot=False).prefetch_related("events").order_by("created_at")
+
+        # Get resource snapshots for this bot
+        resource_snapshots = bot.resource_snapshots.all().order_by("created_at")
+
+        # Calculate maximum values from resource snapshots
+        max_ram_usage = 0
+        max_cpu_usage = 0
+        if resource_snapshots.exists():
+            for snapshot in resource_snapshots:
+                data = snapshot.data
+                ram_usage = data.get("ram_usage_megabytes", 0)
+                cpu_usage = data.get("cpu_usage_millicores", 0)
+
+                if ram_usage > max_ram_usage:
+                    max_ram_usage = ram_usage
+                if cpu_usage > max_cpu_usage:
+                    max_cpu_usage = cpu_usage
 
         context = self.get_project_context(object_id, project)
         context.update(
             {
                 "bot": bot,
                 "BotStates": BotStates,
-                "RecordingStates": RecordingStates,
-                "recordings": generate_recordings_json_for_bot_detail_view(bot),
                 "webhook_delivery_attempts": webhook_delivery_attempts,
+                "chat_messages": chat_messages,
+                "participants": participants,
+                "ParticipantEventTypes": ParticipantEventTypes,
                 "WebhookDeliveryAttemptStatus": WebhookDeliveryAttemptStatus,
                 "credits_consumed": -sum([t.credits_delta() for t in bot.credit_transactions.all()]) if bot.credit_transactions.exists() else None,
+                "resource_snapshots": resource_snapshots,
+                "max_ram_usage": max_ram_usage,
+                "max_cpu_usage": max_cpu_usage,
             }
         )
 
         return render(request, "projects/project_bot_detail.html", context)
 
 
+class ProjectBotRecordingsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
+    def get(self, request, object_id, bot_object_id):
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+
+        try:
+            bot = (
+                Bot.objects.select_related()
+                .prefetch_related(
+                    models.Prefetch(
+                        "recordings",
+                        queryset=Recording.objects.prefetch_related(
+                            models.Prefetch(
+                                "utterances",
+                                queryset=Utterance.objects.select_related("participant"),
+                            ),
+                        ),
+                    ),
+                )
+                .get(object_id=bot_object_id, project=project)
+            )
+        except Bot.DoesNotExist:
+            # Redirect to bots list if bot not found
+            return redirect("bots:project-bots", object_id=object_id)
+
+        context = {
+            "RecordingStates": RecordingStates,
+            "RecordingTypes": RecordingTypes,
+            "RecordingTranscriptionStates": RecordingTranscriptionStates,
+            "recordings": generate_recordings_json_for_bot_detail_view(bot),
+        }
+
+        return render(request, "projects/partials/project_bot_recordings.html", context)
+
+
 class ProjectWebhooksView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def get(self, request, object_id):
-        project = get_object_or_404(Project, object_id=object_id, organization=request.user.organization)
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+
+        # Get or create webhook secret for the project
+        webhook_secret, created = WebhookSecret.objects.get_or_create(project=project)
+
         context = self.get_project_context(object_id, project)
-        context["webhooks"] = WebhookSubscription.objects.filter(project=project).order_by("-created_at")
+        # Only show project-level webhooks, not bot-level ones
+        context["webhooks"] = project.webhook_subscriptions.filter(bot__isnull=True).order_by("-created_at")
         context["webhook_options"] = [trigger_type for trigger_type in WebhookTriggerTypes]
+        context["webhook_secret"] = base64.b64encode(webhook_secret.get_secret()).decode("utf-8")
+        context["REQUIRE_HTTPS_WEBHOOKS"] = settings.REQUIRE_HTTPS_WEBHOOKS
         return render(request, "projects/project_webhooks.html", context)
+
+
+class ProjectProjectView(AdminRequiredMixin, ProjectUrlContextMixin, View):
+    def get(self, request, object_id):
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        context = self.get_project_context(object_id, project)
+        context["users_with_access"] = project.users_with_access()
+        return render(request, "projects/project_project.html", context)
+
+
+class ProjectTeamView(AdminRequiredMixin, ProjectUrlContextMixin, View):
+    def get(self, request, object_id):
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+
+        # Get all users in the organization with invited_by data and their project access
+        users = request.user.organization.users.select_related("invited_by").prefetch_related("project_accesses__project").order_by("-is_active", "id")
+
+        context = self.get_project_context(object_id, project)
+        context["users"] = users
+        # Needed for the checkbox list for choosing which products a user can access
+        context["projects"] = request.user.organization.projects.all()
+        return render(request, "projects/project_team.html", context)
+
+
+class InviteUserView(AdminRequiredMixin, ProjectUrlContextMixin, View):
+    def get(self, request, object_id):
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        context = self.get_project_context(object_id, project)
+        return render(request, "projects/project_team.html", context)
+
+    def post(self, request, object_id):
+        get_project_for_user(user=request.user, project_object_id=object_id)
+        email = request.POST.get("email")
+        is_admin = request.POST.get("is_admin") == "true"
+        selected_project_ids = request.POST.getlist("project_access")
+
+        if not email:
+            return HttpResponse("Email is required", status=400)
+
+        # Check if user already exists
+        if User.objects.filter(email=email).exists():
+            return HttpResponse("A user with this email already exists", status=400)
+
+        # Validate project selection for regular users
+        if not is_admin and not selected_project_ids:
+            return HttpResponse("Please select at least one project for regular users", status=400)
+
+        # Validate that selected projects exist and belong to the organization
+        if not is_admin and selected_project_ids:
+            valid_projects = Project.objects.filter(object_id__in=selected_project_ids, organization=request.user.organization)
+            if len(valid_projects) != len(selected_project_ids):
+                return HttpResponse("Invalid project selection", status=400)
+
+        try:
+            with transaction.atomic():
+                # Create the user with appropriate role
+                user_role = UserRole.ADMIN if is_admin else UserRole.REGULAR_USER
+                user = User.objects.create_user(
+                    email=email,
+                    username=str(uuid.uuid4()),
+                    organization=request.user.organization,
+                    invited_by=request.user,
+                    is_active=True,
+                    role=user_role,
+                )
+
+                # Create project access entries for regular users
+                if not is_admin and selected_project_ids:
+                    for project_id in selected_project_ids:
+                        project = Project.objects.get(object_id=project_id, organization=request.user.organization)
+                        ProjectAccess.objects.create(project=project, user=user)
+
+                # Send verification email
+                send_email_confirmation(request, user, email=email)
+
+                # Return success response
+                return HttpResponse("Invitation sent successfully", status=200)
+
+        except Exception as e:
+            logger.error(f"Error creating invited user: {str(e)}")
+            return HttpResponse("An error occurred while sending the invitation", status=500)
 
 
 class CreateWebhookView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def post(self, request, object_id):
-        project = get_object_or_404(Project, object_id=object_id, organization=request.user.organization)
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
         url = request.POST.get("url")
         triggers = request.POST.getlist("triggers[]")
 
-        # Check if URL is valid
-        if not url.startswith("https://"):
-            return HttpResponse("URL must start with https://", status=400)
-        if WebhookSubscription.objects.filter(url=url, project=project).exists():
-            return HttpResponse("URL already subscribed", status=400)
-        # There is a limit of 2 webhooks per projects for now
-        if WebhookSubscription.objects.filter(project=project).count() >= 2:
-            return HttpResponse("You have reached the maximum number of webhooks", status=400)
+        # Create webhook subscription using shared function
+        try:
+            create_webhook_subscription(url, triggers, project, bot=None)
+        except ValidationError as e:
+            return HttpResponse(e.messages[0], status=400)
 
-        # Check the event is subscribable
-        subscribed_triggers = [int(x) for x in triggers]
-        for trigger in subscribed_triggers:
-            if trigger not in [trigger.value for trigger in WebhookTriggerTypes]:
-                return HttpResponse(f"Invalid event type: {trigger}", status=400)
+        # Get the project's webhook secret for response
+        webhook_secret = WebhookSecret.objects.get(project=project)
 
-        # Get the project's secret for the webhook subscription. If new project, create a new one
-        webhook_secret, created = WebhookSecret.objects.get_or_create(project=project)
-
-        # Create the webhook subscription
-        WebhookSubscription.objects.create(
-            project=project,
-            url=url,
-            triggers=subscribed_triggers,
-        )
-
-        # Render the success modal content
         return render(
             request,
             "projects/partials/webhook_subscription_created_modal.html",
             {
                 "secret": base64.b64encode(webhook_secret.get_secret()).decode("utf-8"),
                 "url": url,
-                "triggers": [WebhookTriggerTypes.trigger_type_to_api_code(x) for x in subscribed_triggers],
+                "triggers": triggers,
             },
         )
 
 
 class DeleteWebhookView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def delete(self, request, object_id, webhook_object_id):
-        webhook = get_object_or_404(
-            WebhookSubscription,
-            object_id=webhook_object_id,
-            project__organization=request.user.organization,
-        )
+        webhook = get_webhook_subscription_for_user(user=request.user, webhook_subscription_object_id=webhook_object_id)
         webhook.delete()
         context = self.get_project_context(object_id, webhook.project)
-        context["webhooks"] = WebhookSubscription.objects.filter(project=webhook.project).order_by("-created_at")
+        context["webhooks"] = WebhookSubscription.objects.filter(project=webhook.project, bot__isnull=True).order_by("-created_at")
         context["webhook_options"] = [trigger_type for trigger_type in WebhookTriggerTypes]
+        context["REQUIRE_HTTPS_WEBHOOKS"] = settings.REQUIRE_HTTPS_WEBHOOKS
         return render(request, "projects/project_webhooks.html", context)
 
 
-class ProjectBillingView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
+class ProjectBillingView(AdminRequiredMixin, ProjectUrlContextMixin, ListView):
     template_name = "projects/project_billing.html"
     context_object_name = "transactions"
     paginate_by = 20
 
     def get_queryset(self):
-        project = get_object_or_404(Project, object_id=self.kwargs["object_id"], organization=self.request.user.organization)
+        project = get_project_for_user(user=self.request.user, project_object_id=self.kwargs["object_id"])
         return CreditTransaction.objects.filter(organization=project.organization).order_by("-created_at")
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        project = get_object_or_404(Project, object_id=self.kwargs["object_id"], organization=self.request.user.organization)
+        project = get_project_for_user(user=self.request.user, project_object_id=self.kwargs["object_id"])
         context.update(self.get_project_context(self.kwargs["object_id"], project))
+
+        # Check if organization has a valid payment method
+        has_payment_method = False
+        if project.organization.autopay_stripe_customer_id:
+            try:
+                # Retrieve the customer to check for default payment method
+                customer = stripe.Customer.retrieve(
+                    project.organization.autopay_stripe_customer_id,
+                    api_key=os.getenv("STRIPE_SECRET_KEY"),
+                )
+                # Check if customer has a default payment method
+                has_payment_method = customer.invoice_settings.default_payment_method is not None
+            except stripe.error.StripeError:
+                # If there's an error querying Stripe, assume no payment method
+                has_payment_method = False
+
+        context["has_payment_method"] = has_payment_method
         return context
 
 
@@ -487,3 +745,68 @@ class CreateCheckoutSessionView(LoginRequiredMixin, ProjectUrlContextMixin, View
 
         # Redirect directly to the Stripe checkout page
         return redirect(checkout_session.url)
+
+
+class CreateBotView(LoginRequiredMixin, ProjectUrlContextMixin, View):
+    def post(self, request, object_id):
+        logger.debug(f"Creating bot...")
+        try:
+            logger.debug("Getting project for user...")
+            project = get_project_for_user(user=request.user, project_object_id=object_id)
+
+            data = {
+                "meeting_url": request.POST.get("meeting_url"),
+                "bot_name": request.POST.get("bot_name") or "Meeting Bot",
+            }
+
+            logger.debug("Creating bot with data: " + str(data))
+            bot, error = create_bot(data=data, source=BotCreationSource.DASHBOARD, project=project)
+            if error:
+                logger.error(f"Error creating bot: {error}")
+                return HttpResponse(json.dumps(error), status=400)
+
+            # If this is a scheduled bot, we don't want to launch it yet.
+            if bot.state == BotStates.JOINING:
+                launch_bot(bot)
+
+            return HttpResponse("ok", status=200)
+        except Exception as e:
+            return HttpResponse(str(e), status=400)
+
+
+class CreateProjectView(AdminRequiredMixin, View):
+    def post(self, request):
+        name = request.POST.get("name")
+
+        if not name:
+            return HttpResponse("Project name is required", status=400)
+
+        if len(name) > 100:
+            return HttpResponse("Project name must be less than 100 characters", status=400)
+
+        # Create a new project for the user's organization
+        project = Project.objects.create(name=name, organization=request.user.organization)
+
+        # Redirect to the new project's dashboard
+        return redirect("bots:project-dashboard", object_id=project.object_id)
+
+
+class EditProjectView(AdminRequiredMixin, View):
+    def put(self, request, object_id):
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+
+        # Parse the request body properly for PUT requests
+        put_data = QueryDict(request.body)
+        name = put_data.get("name")
+
+        if not name:
+            return HttpResponse("Project name is required", status=400)
+
+        if len(name) > 100:
+            return HttpResponse("Project name must be less than 100 characters", status=400)
+
+        # Update the project name
+        project.name = name
+        project.save()
+
+        return HttpResponse("ok", status=200)

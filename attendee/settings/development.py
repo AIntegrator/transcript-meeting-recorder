@@ -3,15 +3,9 @@ import os
 from .base import *
 
 DEBUG = True
-ALLOWED_HOSTS = ["localhost"]
-
-additional_hosts = os.getenv("ALLOWED_HOSTS")
-
-# If the environment variable exists, split it by comma and add to the list
-if additional_hosts:
-    # We use a list comprehension to strip any whitespace from each host
-    ALLOWED_HOSTS.extend([host.strip() for host in additional_hosts.split(',')])
-
+# Allow overriding ALLOWED_HOSTS via environment variable (comma-separated). Keep sensible defaults.
+_env_allowed = os.getenv("ALLOWED_HOSTS", "transcript-meeting-recorder-api,localhost")
+ALLOWED_HOSTS = [h.strip() for h in _env_allowed.split(",") if h.strip()]
 
 DATABASES = {
     "default": {
@@ -28,9 +22,16 @@ DATABASES = {
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
+    "formatters": {
+        "default": {
+            "format": "{asctime} - {name} - {levelname} - {message}",
+            "style": "{",
+        },
+    },
     "handlers": {
         "console": {
             "class": "logging.StreamHandler",
+            "formatter": "default",
         },
     },
     "root": {
@@ -43,5 +44,11 @@ LOGGING = {
             "level": "INFO",
             "propagate": False,
         },
+        # Uncomment to log database queries
+        # "django.db.backends": {
+        #    "handlers": ["console"],
+        #    "level": "DEBUG",
+        #    "propagate": False,
+        # },
     },
 }

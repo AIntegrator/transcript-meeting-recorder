@@ -2,29 +2,52 @@ services:
   recorder-worker:
     container_name: recorder-worker
     #build: ./transcript-meeting-recorder
-    build: ./
+    platform: linux/amd64
+    build:
+      context: ./
+      dockerfile: Dockerfile.dev
     env_file:
       - .env
     volumes:
-    # - .:/transcript-meeting-recorder/attendee
-    - .:/attendee
+      # - .:/transcript-meeting-recorder/attendee
+      - .:/attendee
     networks:
       - recorder_network
     environment:
       - POSTGRES_HOST=postgres
       - REDIS_URL=redis://redis:6379/5
       - DJANGO_SETTINGS_MODULE=attendee.settings.development
-    command: ["/bin/bash", "-c", "/opt/bin/entrypoint.sh && celery -A attendee worker -l INFO"]
+    command:
+      [
+        "/bin/bash",
+        "-c",
+        "/usr/local/bin/entrypoint.sh && celery -A attendee worker -l INFO",
+      ]
+
+  # attendee-scheduler-local:
+  #   build: ./
+  #   volumes:
+  #    - .:/attendee
+  #   networks:
+  #     - attendee_network
+  #   environment:
+  #     - POSTGRES_HOST=postgres
+  #     - REDIS_URL=redis://redis:6379/5
+  #     - DJANGO_SETTINGS_MODULE=attendee.settings.development
+  #   command: ["/bin/bash", "-c", "/opt/bin/entrypoint.sh && python manage.py run_scheduler"]
 
   recorder-api:
     container_name: recorder-api
     #build: ./transcript-meeting-recorder
-    build: ./
+    platform: linux/amd64
+    build:
+      context: ./
+      dockerfile: Dockerfile.dev
     env_file:
       - .env
     volumes:
-    # - .:/transcript-meeting-recorder/attendee
-    - .:/attendee
+      # - .:/transcript-meeting-recorder/attendee
+      - .:/attendee
     networks:
       - recorder_network
     ports:
@@ -43,7 +66,7 @@ services:
       POSTGRES_PASSWORD: attendee_development_user
       PGDATA: /data/postgres
     volumes:
-       - postgres:/data/postgres
+      - postgres:/data/postgres
     networks:
       - recorder_network
     restart: unless-stopped
