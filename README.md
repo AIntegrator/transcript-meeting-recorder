@@ -1,4 +1,6 @@
 # Meeting Recorder
+
+This is a fork of attendee by Noah Duncan, optimized to work with our architecture.
  
 ## Self-hosting
 
