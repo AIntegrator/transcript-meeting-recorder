@@ -166,7 +166,7 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
     if recording_file_name:
         settings["recording_file_name"] = recording_file_name
 
-    logger.debug("Creating bot with settings: " + str(settings))
+    logger.info("Creating bot with settings: " + str(settings))
 
     try:
         logger.debug("Creating bot in database...")
