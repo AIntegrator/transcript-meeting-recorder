@@ -95,7 +95,6 @@ local_settings.py
 .env
 .env.local
 .env.*.local
-.env.bak
 *.env
 db.sqlite3
 
