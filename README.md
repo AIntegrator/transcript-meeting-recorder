@@ -39,6 +39,13 @@ The meeting recorder is a clone of the open source repository 'attendee' by Noah
 - Start the dependencies: `kubectl apply -f deployment-redis.yaml`, `kubectl apply -f deployment-postgres.yaml`, `kubectl apply -f role-meeting-recorder-bot.yaml`
 - Run skaffold in dev mode: `skaffold dev`
 
+## Create and apply migrations
+
+- Make your model changes in the Django app. See defined app in attendee/setting/base.py, e.g. `base.py`.
+- Run the app with `docker-compose -f dev.docker-compose.yml up` 
+- In a separate terminal window create the migrations for e.g. the ´bots´ app with `docker compose -f dev.docker-compose.yml exec recorder-api python manage.py makemigrations bots` 
+- To apply migrations to the database, run `docker compose -f dev.docker-compose.yml exec recorder-api python manage.py migrate`
+
 ## Deployment
 
 - Build the Docker image: `docker build --platform=linux/amd64 -t vanyabrucker/transcript-meeting-recorder:1.0.32 -f Dockerfile.dev .` (Takes about 5 minutes)
