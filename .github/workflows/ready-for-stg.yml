@@ -1,0 +1,26 @@
+name: Send Message to Google Chat
+
+on:
+  # Trigger when a label is added to a Pull Request
+  pull_request:
+    types: [labeled]
+
+jobs:
+  notify-google-chat:
+    # ONLY run if the specific label applied was "ready-for-stg"
+    if: github.event.label.name == 'ready-for-stg'
+    name: Google Chat GitHub Action
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Notify Google Chat
+        if: ${{ always() }}
+        uses: SimonScholz/google-chat-action@main
+        with:
+          webhookUrl: "${{ secrets.GOOGLE_CHAT_WEBHOOK_URL }}"
+          title: "Ready for Staging Deployment"
+          subtitle: "Branch: ${{ github.head_ref }}"
