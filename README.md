@@ -1,58 +1,86 @@
-# Meeting Recorder
+# Meeting Recorder Service
 
-This is a fork of attendee by Noah Duncan, optimized to work with our architecture.
- 
-## Self-hosting
+This is a customized fork of the open-source repository `attendee` by Noah Duncan, optimized to work with our specific architecture.
 
-The meeting recorder is a clone of the open source repository 'attendee' by Noah Duncan. It's a Django app made to run in a single Docker image. The only external services needed are Postgres and Redis. Directions for running locally in development mode [here](#running-in-development-mode).
+## Overview
 
-## Running in development mode
+The Meeting Recorder is a Django application designed to run as a single Docker image, supported by **Postgres** and **Redis**.
 
-- Build the Docker image: `docker compose -f dev.docker-compose.yml build` (Takes about 5 minutes)
-- Create local environment variables: `docker compose -f dev.docker-compose.yml run --rm recorder-api python init_env.py > .env`
-- Edit the `.env` file and enter your AWS information.
-- Start all the services: `docker compose -f dev.docker-compose.yml up`
-- After the services have started, run migrations in a separate terminal tab: `docker compose -f dev.docker-compose.yml exec recorder-api python manage.py migrate`
-- Go to localhost:8001 in your browser and create an account
-- The confirmation link will be written to the server logs in the terminal where you ran `docker compose -f dev.docker-compose.yml up`. Should look like `http://localhost:8001/accounts/confirm-email/<key>/`.
-- Paste the link into your browser to confirm your account.
-- You should now be able to log in, input your credentials and obtain an API key. API calls should be directed to http://localhost:8000.
+**Core Architecture:**
+1.  **Main API:** Handles authentication, account management, and bot orchestration.
+2.  **Bots:** The API spins up recorder pods (workers) called "Bots". These bots:
+    * Join a meeting (Zoom, Teams, etc.).
+    * Record the audio/video.
+    * Upload the raw data to Object Storage (OpenStack Swift).
+    * Leave the meeting and destroy themselves.
+    * Trigger a callback to the `transcript-gateway`.
 
-## Running in dev mode with skaffold
+## Key Customizations (vs Upstream)
 
-- Install skaffold: `brew install skaffold`
-- Install Docker Desktop: https://www.docker.com/products/docker-desktop
-- Start Docker Desktop with Kubernetes enabled and ensure you are in the desktop context: `kubectl config current-context`
-- Clone the transcript-k8s repository for the k8s manifests.
-- Populate the skaffold config file (`skaffold.yaml`) with your local k8s manifests path, e.g.:
-  - ```yaml
+This fork deviates from the original `attendee` repository in several key ways:
+
+* **Custom Storage:** We utilize OpenStack Swift (via Infomaniak) instead of AWS S3. 
+    * *Location:* `/bots/storage/infomaniak_storage.py`
+* **Callbacks:** Post-recording, the bot triggers a callback to our `transcript-gateway`.
+    * *Location:* `/transcript_services/v1/api_service.py`
+* **Kubernetes Native:** We have removed non-essential bloat and added more logs to support running inside a K8s cluster.
+
+## Development Setup
+
+### 1. Running Locally (Docker Compose)
+*Best for quick logic changes and database testing.*
+
+1.  **Build the image:**
+    `docker compose -f dev.docker-compose.yml build`
+2.  **Generate Environment Variables:**
+    `docker compose -f dev.docker-compose.yml run --rm recorder-api python init_env.py > .env`
+    *(Edit the generated `.env` file to add your AWS/Storage credentials)*
+3.  **Start Services:**
+    `docker compose -f dev.docker-compose.yml up`
+4.  **Run Migrations:**
+    `docker compose -f dev.docker-compose.yml exec recorder-api python manage.py migrate`
+5.  **Create Account:**
+    * Go to `localhost:8001` to sign up.
+    * Find the confirmation link in your terminal logs (e.g., `http://localhost:8001/accounts/confirm-email/<key>/`).
+    * Login to obtain your API Key.
+
+### 2. Running with Skaffold (Kubernetes)
+*Best for testing integration with the wider cluster architecture.*
+
+**Prerequisites:**
+* `skaffold` (`brew install skaffold`)
+* Docker Desktop (Kubernetes enabled)
+* Clone of the `transcript-gitops` repository (for manifests).
+
+**Configuration:**
+1.  Update `skaffold.yaml` to point to your local path for the manifests:
+    ```yaml
     manifests:
         rawYaml:
-        - /Users/USERNAME/K8S_REPO_PATH/transcript-k8s/deployment-meeting-recorder-api-dev.yaml)
+        - /Users/USERNAME/PATH_TO/transcript-k8s/deployment-meeting-recorder-api-dev.yaml
     ```
-- Create and populate the docker and transcript secrets files:
-  - `cp ./secret-examples/secret-docker.yaml secret-docker.yaml`
-  - `cp ./secret-examples/secret-transcript.yaml secret-transcript.yaml`
-- Apply the secrets to your Kubernetes cluster:
-  - `kubectl apply -f secret-docker.yaml`
-  - `kubectl apply -f secret-transcript.yaml`
-- Apply the configmap:
-  - `kubectl apply -f configmap-transcript.yaml`
-- Start the dependencies: `kubectl apply -f deployment-redis.yaml`, `kubectl apply -f deployment-postgres.yaml`, `kubectl apply -f role-meeting-recorder-bot.yaml`
-- Run skaffold in dev mode: `skaffold dev`
+2.  **Secrets Management:**
+    * Copy examples: `cp ./secret-examples/secret-docker.yaml secret-docker.yaml`
+    * Apply: `kubectl apply -f secret-docker.yaml` (and repeat for `secret-transcript.yaml`)
+3.  **Apply Configs & Deps:**
+    * `kubectl apply -f configmap-transcript.yaml`
+    * `kubectl apply -f deployment-redis.yaml`
+    * `kubectl apply -f deployment-postgres.yaml`
+    * `kubectl apply -f role-meeting-recorder-bot.yaml`
+4.  **Run:**
+    `skaffold dev`
 
-## Create and apply migrations
+### 3. Database Migrations
 
-- Make your model changes in the Django app. See defined app in attendee/setting/base.py, e.g. `base.py`.
-- Run the app with `docker-compose -f dev.docker-compose.yml up` 
-- In a separate terminal window create the migrations for e.g. the ´bots´ app with `docker compose -f dev.docker-compose.yml exec recorder-api python manage.py makemigrations bots` 
-- To apply migrations to the database, run `docker compose -f dev.docker-compose.yml exec recorder-api python manage.py migrate`
+* **Create Migrations:**
+    `docker compose -f dev.docker-compose.yml exec recorder-api python manage.py makemigrations bots`
+* **Apply Migrations:**
+    `docker compose -f dev.docker-compose.yml exec recorder-api python manage.py migrate`
 
 ## Deployment
 
 - Build the Docker image: `docker build --platform=linux/amd64 -t vanyabrucker/transcript-meeting-recorder:1.0.32 -f Dockerfile.dev .` (Takes about 5 minutes)
 - Push the image to Docker Hub: `docker push vanyabrucker/transcript-meeting-recorder:1.0.32`
-
 
 ## Calling the API
 
