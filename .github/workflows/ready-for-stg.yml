@@ -1,26 +1,74 @@
-name: Send Message to Google Chat
+name: PR Approval & Staging Ready
 
 on:
-  # Trigger when a label is added to a Pull Request
   pull_request:
-    types: [labeled]
+    branches:
+      - main
+    types: [opened, reopened, synchronize] # Run on PR creation/update
+  pull_request_review:
+    types: [submitted] # Run when a review is submitted
 
 jobs:
-  notify-google-chat:
-    # ONLY run if the specific label applied was "ready-for-stg"
-    if: github.event.label.name == 'ready-for-stg'
-    name: Google Chat GitHub Action
+  check-approvals-and-notify:
     runs-on: ubuntu-latest
 
+    permissions:
+      pull-requests: write
+      contents: read
+
     steps:
-      - name: Checkout
-        id: checkout
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Notify Google Chat
-        if: ${{ always() }}
+      - name: Determine PR Number
+        id: extract_pr
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+          else
+            echo "pr_number=${{ github.event.review.pull_request_number }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check for required approvals
+        id: check_approvals
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.extract_pr.outputs.pr_number }}
+          REQUIRED_COUNT: 2
+        run: |
+          echo "Checking approvals for PR #$PR_NUMBER"
+
+          # Use the GitHub CLI to get a list of unique 'APPROVED' reviews
+          APPROVED_COUNT=$(gh pr view $PR_NUMBER --json reviews --jq '
+            .reviews
+            | map(select(.state == "APPROVED"))
+            | unique_by(.author.login)
+            | length
+          ')
+
+          echo "Found $APPROVED_COUNT approvals (Required: $REQUIRED_COUNT)"
+
+          if [ "$APPROVED_COUNT" -ge "$REQUIRED_COUNT" ]; then
+            echo "approved=true" >> $GITHUB_OUTPUT
+            echo "head_ref=${{ github.event.pull_request.head.ref }}" >> $GITHUB_OUTPUT # Pass the branch name for notification
+          else
+            echo "approved=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Add 'ready-for-stg' label
+        if: ${{ steps.check_approvals.outputs.approved == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.extract_pr.outputs.pr_number }}
+        run: |
+          echo "Adding 'ready-for-stg' label to PR #$PR_NUMBER"
+          # The -f flag suppresses errors if the label already exists
+          gh pr edit $PR_NUMBER --add-label "ready-for-stg" -f
+
+      - name: Notify Google Chat (Ready for Staging)
+        if: ${{ steps.check_approvals.outputs.approved == 'true' }}
         uses: SimonScholz/google-chat-action@main
         with:
           webhookUrl: "${{ secrets.GOOGLE_CHAT_WEBHOOK_URL }}"
-          title: "Ready for Staging Deployment"
-          subtitle: "Branch: ${{ github.head_ref }}"
+          title: "✅ Ready for Staging Deployment"
+          subtitle: "Branch: ${{ steps.check_approvals.outputs.head_ref || github.event.pull_request.head.ref }}"
