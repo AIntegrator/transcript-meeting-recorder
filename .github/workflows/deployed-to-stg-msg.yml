@@ -1,0 +1,24 @@
+name: Notify Google Chat on Merge to Main
+
+on:
+  # Trigger when a Pull Request is closed
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+
+jobs:
+  notify-on-merge:
+    if: |
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main'
+    name: Google Chat Notify Merge
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Notify Google Chat (Merge Success)
+        uses: SimonScholz/google-chat-action@main
+        with:
+          webhookUrl: "${{ secrets.GOOGLE_CHAT_WEBHOOK_URL }}"
+          title: "🎉 Yay!! Deployment Success! 🎉"
+          subtitle: "Branch: ${{ github.event.pull_request.head.ref }} successfully merged to ${{ github.event.pull_request.base.ref }} and deployed to staging!!"
