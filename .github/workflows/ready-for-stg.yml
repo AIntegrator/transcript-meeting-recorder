@@ -4,9 +4,9 @@ on:
   pull_request:
     branches:
       - main
-    types: [opened, reopened, synchronize] # Run on PR creation/update
+    types: [opened, reopened, synchronize, labeled] # Run on PR creation/update, including label changes
   pull_request_review:
-    types: [submitted] # Run when a review is submitted
+    types: [submitted] 
 
 jobs:
   check-approvals-and-notify:
@@ -30,6 +30,8 @@ jobs:
           fi
 
       - name: Check for required approvals
+        # Only run this step if it's NOT a simple 'labeled' event (otherwise it can fail/run unnecessarily)
+        if: ${{ github.event_name != 'pull_request' || github.event.action != 'labeled' }}
         id: check_approvals
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -50,25 +52,31 @@ jobs:
 
           if [ "$APPROVED_COUNT" -ge "$REQUIRED_COUNT" ]; then
             echo "approved=true" >> $GITHUB_OUTPUT
-            echo "head_ref=${{ github.event.pull_request.head.ref }}" >> $GITHUB_OUTPUT # Pass the branch name for notification
+            # Capture the head_ref for the notification
+            echo "head_ref=$(gh pr view $PR_NUMBER --json headRefName -q .headRefName)" >> $GITHUB_OUTPUT
           else
             echo "approved=false" >> $GITHUB_OUTPUT
           fi
 
       - name: Add 'ready-for-stg' label
-        if: ${{ steps.check_approvals.outputs.approved == 'true' }}
+        # Only attempt to add the label if the approvals step was run AND it succeeded
+        if: ${{ steps.check_approvals.outcome == 'success' && steps.check_approvals.outputs.approved == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ steps.extract_pr.outputs.pr_number }}
         run: |
           echo "Adding 'ready-for-stg' label to PR #$PR_NUMBER"
-          # The -f flag suppresses errors if the label already exists
           gh pr edit $PR_NUMBER --add-label "ready-for-stg" -f
 
       - name: Notify Google Chat (Ready for Staging)
-        if: ${{ steps.check_approvals.outputs.approved == 'true' }}
+        id: notify_chat # Automatic label and manual label attached
+        if: |
+          ${{ 
+            (steps.check_approvals.outcome == 'success' && steps.check_approvals.outputs.approved == 'true') ||
+            (github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'ready-for-stg')
+          }}
         uses: SimonScholz/google-chat-action@main
         with:
           webhookUrl: "${{ secrets.GOOGLE_CHAT_WEBHOOK_URL }}"
-          title: "✅ Ready for Staging Deployment"
+          title: "Ready for Staging Deployment"
           subtitle: "Branch: ${{ steps.check_approvals.outputs.head_ref || github.event.pull_request.head.ref }}"
