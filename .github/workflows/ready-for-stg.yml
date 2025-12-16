@@ -68,15 +68,19 @@ jobs:
           echo "Adding 'ready-for-stg' label to PR #$PR_NUMBER"
           gh pr edit $PR_NUMBER --add-label "ready-for-stg" -f
 
-      - name: Notify Google Chat (Ready for Staging)
-        id: notify_chat # Automatic label and manual label attached
-        if: |
-          ${{ 
-            (steps.check_approvals.outcome == 'success' && steps.check_approvals.outputs.approved == 'true') ||
-            (github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'ready-for-stg')
-          }}
+  notify-google-chat:
+    # ONLY run if the specific label applied was "ready-for-stg"
+    if: github.event.label.name == 'ready-for-stg'
+    name: Google Chat GitHub Action
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        id: checkout
+        uses: actions/checkout@v4
+      - name: Notify Google Chat
+        if: ${{ always() }}
         uses: SimonScholz/google-chat-action@main
         with:
           webhookUrl: "${{ secrets.GOOGLE_CHAT_WEBHOOK_URL }}"
           title: "Ready for Staging Deployment"
-          subtitle: "Branch: ${{ steps.check_approvals.outputs.head_ref || github.event.pull_request.head.ref }}"
+          subtitle: "Branch: ${{ github.head_ref }}"
