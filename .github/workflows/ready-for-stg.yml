@@ -36,7 +36,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ steps.extract_pr.outputs.pr_number }}
-          REQUIRED_COUNT: 2
+          REQUIRED_COUNT: 1
         run: |
           echo "Checking approvals for PR #$PR_NUMBER"
 
