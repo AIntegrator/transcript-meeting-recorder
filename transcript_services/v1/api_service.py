@@ -52,6 +52,48 @@ def start_transcription(transcript_uuid):
 
     return response
 
+def started_recording(transcript_id):
+    """
+    Notify gateway that recording has started for a given transcript ID.
+
+    Args:
+        transcript_id (str): The ID of the transcript
+        
+    Returns:
+        requests.Response: The response from the API
+    """
+    # API credentials
+    api_key = os.getenv("TRANSCRIPT_API_KEY")
+
+    if not api_key:
+        raise ValueError("API key is not set in environment variables.")
+
+    # API endpoint
+    url = os.getenv("TRANSCRIPT_API_URL") + "/api/v1/record/started"
+
+    if not url:
+        raise ValueError("API URL is not set in environment variables.")
+
+    # Request headers
+    headers = {
+        "x-api-key": api_key,
+    }
+
+    # Request parameters
+    params = {"transcript_id": transcript_id}
+
+    # Send POST request
+    response = requests.post(url, headers=headers, params=params, timeout=30)
+
+    # Check if request was successful
+    if response.status_code == 200:
+        logger.info(f"Successfully notified gateway that recording started for UUID: {transcript_id}")
+    else:
+        logger.error(f"Error notifying gateway of recording start: {response.status_code}")
+        logger.error(f"Response: {response.text}")
+
+    return response
+
 
 def could_not_record(transcript_id):
     logger.error(f"Could not record for transcript ID: {transcript_id}")
