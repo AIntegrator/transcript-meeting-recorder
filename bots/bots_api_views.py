@@ -110,6 +110,54 @@ NewlyCreatedBotExample = OpenApiExample(
 
 
 @extend_schema(exclude=True)
+class RecordStartedView(APIView):
+    """Webhook endpoint called when recording has started"""
+    authentication_classes = [ApiKeyAuthentication]
+
+    def post(self, request):
+        transcript_id = request.query_params.get("transcript_id")
+        if not transcript_id:
+            return Response({"error": "transcript_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        logger = logging.getLogger(__name__)
+        logger.info(f"Recording started notification received for transcript_id: {transcript_id}")
+        
+        return Response({"status": "success", "message": "Recording start notification received"}, status=status.HTTP_200_OK)
+
+
+@extend_schema(exclude=True)
+class RecordDoneView(APIView):
+    """Webhook endpoint called when recording is complete"""
+    authentication_classes = [ApiKeyAuthentication]
+
+    def post(self, request):
+        transcript_id = request.query_params.get("transcript_id")
+        if not transcript_id:
+            return Response({"error": "transcript_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        logger = logging.getLogger(__name__)
+        logger.info(f"Recording done notification received for transcript_id: {transcript_id}")
+        
+        return Response({"status": "success", "message": "Recording completion notification received"}, status=status.HTTP_200_OK)
+
+
+@extend_schema(exclude=True)
+class RecordFailedView(APIView):
+    """Webhook endpoint called when recording has failed"""
+    authentication_classes = [ApiKeyAuthentication]
+
+    def post(self, request):
+        transcript_id = request.query_params.get("transcript_id")
+        if not transcript_id:
+            return Response({"error": "transcript_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        logger = logging.getLogger(__name__)
+        logger.error(f"Recording failed notification received for transcript_id: {transcript_id}")
+        
+        return Response({"status": "success", "message": "Recording failure notification received"}, status=status.HTTP_200_OK)
+
+
+@extend_schema(exclude=True)
 class NotFoundView(APIView):
     def get(self, request, *args, **kwargs):
         return self.handle_request(request, *args, **kwargs)
