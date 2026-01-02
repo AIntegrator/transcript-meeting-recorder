@@ -34,7 +34,8 @@ def start_transcription(transcript_uuid):
 
     # Request headers
     headers = {
-        "x-api-key": api_key,
+        "Authorization": f"Token {api_key}",
+        "Content-Type": "application/json",
     }
 
     # Request parameters
@@ -76,7 +77,8 @@ def started_recording(transcript_id):
 
     # Request headers
     headers = {
-        "x-api-key": api_key,
+        "Authorization": f"Token {api_key}",
+        "Content-Type": "application/json",
     }
 
     # Request parameters
@@ -112,7 +114,8 @@ def could_not_record(transcript_id):
 
     # Request headers
     headers = {
-        "x-api-key": api_key,
+        "Authorization": f"Token {api_key}",
+        "Content-Type": "application/json",
     }
 
     # Request parameters
