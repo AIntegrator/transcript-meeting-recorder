@@ -115,7 +115,7 @@ class RecordStartedView(APIView):
     authentication_classes = [ApiKeyAuthentication]
 
     def post(self, request):
-        transcript_id = request.query_params.get("transcript_id")
+        transcript_id = request.data.get("transcript_id")
         if not transcript_id:
             return Response({"error": "transcript_id is required"}, status=status.HTTP_400_BAD_REQUEST)
         
@@ -131,7 +131,7 @@ class RecordDoneView(APIView):
     authentication_classes = [ApiKeyAuthentication]
 
     def post(self, request):
-        transcript_id = request.query_params.get("transcript_id")
+        transcript_id = request.data.get("transcript_id")
         if not transcript_id:
             return Response({"error": "transcript_id is required"}, status=status.HTTP_400_BAD_REQUEST)
         
@@ -147,7 +147,7 @@ class RecordFailedView(APIView):
     authentication_classes = [ApiKeyAuthentication]
 
     def post(self, request):
-        transcript_id = request.query_params.get("transcript_id")
+        transcript_id = request.data.get("transcript_id")
         if not transcript_id:
             return Response({"error": "transcript_id is required"}, status=status.HTTP_400_BAD_REQUEST)
         
