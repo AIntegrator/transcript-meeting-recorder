@@ -34,15 +34,15 @@ def start_transcription(transcript_uuid):
 
     # Request headers
     headers = {
-        "Authorization": f"Token {api_key}",
+        "x-api-key": api_key,
         "Content-Type": "application/json",
     }
 
-    # Request body
-    data = {"transcript_id": transcript_uuid}
+    # Query parameters
+    params = {"transcript_id": transcript_uuid}
 
     # Send POST request
-    response = requests.post(url, headers=headers, json=data, timeout=30)
+    response = requests.post(url, headers=headers, params=params, timeout=30)
 
     # Check if request was successful
     if response.status_code == 200:
@@ -77,15 +77,15 @@ def started_recording(transcript_id):
 
     # Request headers
     headers = {
-        "Authorization": f"Token {api_key}",
+        "x-api-key": api_key,
         "Content-Type": "application/json",
     }
 
-    # Request body
-    data = {"transcript_id": transcript_id}
+    # Query parameters
+    params = {"transcript_id": transcript_id}
 
     # Send POST request
-    response = requests.post(url, headers=headers, json=data, timeout=30)
+    response = requests.post(url, headers=headers, params=params, timeout=30)
 
     # Check if request was successful
     if response.status_code == 200:
@@ -114,15 +114,15 @@ def could_not_record(transcript_id):
 
     # Request headers
     headers = {
-        "Authorization": f"Token {api_key}",
+        "x-api-key": api_key,
         "Content-Type": "application/json",
     }
 
-    # Request body
-    data = {"transcript_id": transcript_id}
+    # Query parameters
+    params = {"transcript_id": transcript_id}
 
     # Send POST request
-    response = requests.post(url, headers=headers, json=data)
+    response = requests.post(url, headers=headers, params=params)
 
     # Check if request was successful
     if response.status_code == 200:
