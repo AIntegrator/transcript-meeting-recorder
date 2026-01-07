@@ -1169,7 +1169,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
     recording_settings = RecordingSettingsJSONField(
         help_text="The settings for the bot's recording.",
         required=False,
-        default={"format": RecordingFormats.MP4, "view": RecordingViews.SPEAKER_VIEW, "resolution": RecordingResolutions.HD_1080P, "record_chat_messages_when_paused": False, "record_async_transcription_audio_chunks": False},
+        default={"format": RecordingFormats.MP3, "view": RecordingViews.SPEAKER_VIEW, "resolution": RecordingResolutions.HD_1080P, "record_chat_messages_when_paused": False, "record_async_transcription_audio_chunks": False},
     )
 
     RECORDING_SETTINGS_SCHEMA = {
@@ -1193,7 +1193,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             return value
 
         # Define defaults
-        defaults = {"format": RecordingFormats.MP4, "view": RecordingViews.SPEAKER_VIEW, "resolution": RecordingResolutions.HD_1080P, "record_chat_messages_when_paused": False}
+        defaults = {"format": RecordingFormats.MP3, "view": RecordingViews.SPEAKER_VIEW, "resolution": RecordingResolutions.HD_1080P, "record_chat_messages_when_paused": False}
 
         try:
             jsonschema.validate(instance=value, schema=self.RECORDING_SETTINGS_SCHEMA)
