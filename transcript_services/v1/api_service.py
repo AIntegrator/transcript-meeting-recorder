@@ -38,11 +38,11 @@ def start_transcription(transcript_uuid):
         "Content-Type": "application/json",
     }
 
-    # Query parameters
-    params = {"transcript_id": transcript_uuid}
+    # Request body
+    data = {"transcript_id": transcript_uuid}
 
     # Send POST request
-    response = requests.post(url, headers=headers, params=params, timeout=30)
+    response = requests.post(url, headers=headers, json=data, timeout=30)
 
     # Check if request was successful
     if response.status_code == 200:
@@ -81,11 +81,11 @@ def started_recording(transcript_id):
         "Content-Type": "application/json",
     }
 
-    # Query parameters
-    params = {"transcript_id": transcript_id}
+    # Request body
+    data = {"transcript_id": transcript_id}
 
     # Send POST request
-    response = requests.post(url, headers=headers, params=params, timeout=30)
+    response = requests.post(url, headers=headers, json=data, timeout=30)
 
     # Check if request was successful
     if response.status_code == 200:
@@ -118,11 +118,11 @@ def could_not_record(transcript_id):
         "Content-Type": "application/json",
     }
 
-    # Query parameters
-    params = {"transcript_id": transcript_id}
+    # Request body
+    data = {"transcript_id": transcript_id}
 
     # Send POST request
-    response = requests.post(url, headers=headers, params=params)
+    response = requests.post(url, headers=headers, json=data)
 
     # Check if request was successful
     if response.status_code == 200:
