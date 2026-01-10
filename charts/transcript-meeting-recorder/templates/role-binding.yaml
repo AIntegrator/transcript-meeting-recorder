@@ -1,0 +1,13 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: bot-pod-creator-binding
+  namespace: apps
+subjects:
+- kind: ServiceAccount
+  name: default
+  namespace: apps
+roleRef:
+  kind: Role
+  name: bot-pod-creator
+  apiGroup: rbac.authorization.k8s.io
