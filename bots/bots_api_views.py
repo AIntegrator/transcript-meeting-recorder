@@ -17,6 +17,7 @@ from rest_framework.pagination import CursorPagination
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from transcript_services.v1.api_service import started_recording, start_transcription, could_not_record
 from .authentication import ApiKeyAuthentication
 from .bots_api_utils import BotCreationSource, create_bot, create_bot_chat_message_request, create_bot_media_request_for_image, delete_bot, patch_bot, send_sync_command
 from .launch_bot_utils import launch_bot
@@ -107,6 +108,75 @@ NewlyCreatedBotExample = OpenApiExample(
     },
     description="Example response when creating a new bot",
 )
+
+
+@extend_schema(exclude=True)
+class RecordStartedView(APIView):
+    """Webhook endpoint called when recording has started"""
+    authentication_classes = [ApiKeyAuthentication]
+
+    def post(self, request):
+        transcript_id = request.data.get("transcript_id")
+        if not transcript_id:
+            return Response({"error": "transcript_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        logger = logging.getLogger(__name__)
+        logger.info(f"Recording started notification received for transcript_id: {transcript_id}")
+        
+        try:
+            response = started_recording(transcript_id)
+            response.raise_for_status()
+            logger.info(f"Successfully forwarded recording started notification to gateway: {response.status_code}")
+            return Response({"status": "success", "message": "Recording start notification received"}, status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.error(f"Failed to forward recording started notification to gateway: {str(e)}")
+            return Response({"error": "Failed to notify gateway"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@extend_schema(exclude=True)
+class RecordDoneView(APIView):
+    """Webhook endpoint called when recording is complete"""
+    authentication_classes = [ApiKeyAuthentication]
+
+    def post(self, request):
+        transcript_id = request.data.get("transcript_id")
+        if not transcript_id:
+            return Response({"error": "transcript_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        logger = logging.getLogger(__name__)
+        logger.info(f"Recording done notification received for transcript_id: {transcript_id}")
+        
+        try:
+            response = start_transcription(transcript_id)
+            response.raise_for_status()
+            logger.info(f"Successfully forwarded recording done notification to gateway: {response.status_code}")
+            return Response({"status": "success", "message": "Recording completion notification received"}, status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.error(f"Failed to forward recording done notification to gateway: {str(e)}")
+            return Response({"error": "Failed to notify gateway"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@extend_schema(exclude=True)
+class RecordFailedView(APIView):
+    """Webhook endpoint called when recording has failed"""
+    authentication_classes = [ApiKeyAuthentication]
+
+    def post(self, request):
+        transcript_id = request.data.get("transcript_id")
+        if not transcript_id:
+            return Response({"error": "transcript_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        logger = logging.getLogger(__name__)
+        logger.error(f"Recording failed notification received for transcript_id: {transcript_id}")
+        
+        try:
+            response = could_not_record(transcript_id)
+            response.raise_for_status()
+            logger.info(f"Successfully forwarded recording failed notification to gateway: {response.status_code}")
+            return Response({"status": "success", "message": "Recording failure notification received"}, status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.error(f"Failed to forward recording failed notification to gateway: {str(e)}")
+            return Response({"error": "Failed to notify gateway"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @extend_schema(exclude=True)

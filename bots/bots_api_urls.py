@@ -3,6 +3,11 @@ from django.urls import path
 from . import bots_api_views
 
 urlpatterns = [
+    # Recording webhook endpoints
+    path("record/started", bots_api_views.RecordStartedView.as_view(), name="record-started"),
+    path("record/done", bots_api_views.RecordDoneView.as_view(), name="record-done"),
+    path("record/failed", bots_api_views.RecordFailedView.as_view(), name="record-failed"),
+    # Bot endpoints
     path("bots", bots_api_views.BotListCreateView.as_view(), name="bot-list-create"),
     path(
         "bots/<str:object_id>",

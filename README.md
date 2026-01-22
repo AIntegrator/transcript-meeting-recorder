@@ -79,8 +79,14 @@ This fork deviates from the original `attendee` repository in several key ways:
 
 ## Deployment
 
-- Build the Docker image: `docker build --platform=linux/amd64 -t vanyabrucker/transcript-meeting-recorder:1.0.32 -f Dockerfile.dev .` (Takes about 5 minutes)
-- Push the image to Docker Hub: `docker push vanyabrucker/transcript-meeting-recorder:1.0.32`
+- Build the Docker image (Takes about 5 minutes) 
+```bash
+docker build --platform=linux/amd64 -t azytaku/transcript-meeting-recorder:1.0.33 -f Dockerfile.dev .
+``` 
+- Push the image to Docker Hub 
+```bash
+docker push azytaku/transcript-meeting-recorder:1.0.33
+```
 
 ## Calling the API
 

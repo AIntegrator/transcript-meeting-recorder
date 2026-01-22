@@ -1564,6 +1564,13 @@ class BotController:
             # The internal pipeline needs to start or resume recording.
             self.start_or_resume_recording_for_pipeline_objects_raise_on_failure()
 
+            # Notify the gateway that recording has started
+            try:
+                transcript_id = self.get_recording_filename().split(".")[0]
+                transcript_api_service.started_recording(transcript_id)
+            except Exception as e:
+                logger.error(f"Failed to notify gateway that recording started: {e}")
+
             BotEventManager.create_event(
                 bot=self.bot_in_db,
                 event_type=BotEventTypes.BOT_RECORDING_PERMISSION_GRANTED,
