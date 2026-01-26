@@ -1,0 +1,21 @@
+name: Notify on Merge
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+
+jobs:
+  notify-deploy:
+    if: github.event.pull_request.merged == true
+    
+    uses: AIntegrator/github-workflows/.github/workflows/on-merge.yml@main
+    with:
+      # CUSTOM MESSAGE HERE
+      notification_title: "🚀 Deployed to Staging"
+      notification_subtitle: |
+        Success! PR #${{ github.event.pull_request.number }} merged into main.
+        Feature: ${{ github.event.pull_request.title }}
+        Author: ${{ github.event.pull_request.user.login }}
+    secrets: inherit
