@@ -1,0 +1,36 @@
+name: Push to STG CI
+
+on: 
+  workflow_dispatch:
+  
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs: 
+  release:
+    if: |
+      github.event_name == 'workflow_dispatch' || 
+      (github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'ready-for-stg'))
+    uses: AIntegrator/github-workflows/.github/workflows/build-push-to-stg.yml@main
+    
+    secrets:
+      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      GH_PAT: ${{ secrets.GH_PAT }}
+    
+    with:
+      docker_image_name: "azytaku/transcript-meeting-recorder" 
+      dockerfile: "Dockerfile.dev"
+      platform: "linux/amd64"
+      # the repo      
+      config_repo: "AIntegrator/transcript-gitops"
+      # the path inside the repo
+      values_file_path: "stg/values/transcript-meeting-recorder-values.yaml"
+      # the yaml key to update
+      yaml_key: ".image.tag"
