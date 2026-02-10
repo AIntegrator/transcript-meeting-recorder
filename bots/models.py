@@ -593,7 +593,7 @@ class Bot(models.Model):
         recording_settings = self.settings.get("recording_settings", {})
         if recording_settings is None:
             recording_settings = {}
-        return recording_settings.get("format", RecordingFormats.MP4)
+        return recording_settings.get("format", RecordingFormats.MP3)
 
     def record_chat_messages_when_paused(self):
         recording_settings = self.settings.get("recording_settings", {})
