@@ -1,7 +1,7 @@
+import logging
 import os
 
 import requests
-import logging
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -53,13 +53,14 @@ def start_transcription(transcript_uuid):
 
     return response
 
+
 def started_recording(transcript_id):
     """
     Notify gateway that recording has started for a given transcript ID.
 
     Args:
         transcript_id (str): The ID of the transcript
-        
+
     Returns:
         requests.Response: The response from the API
     """

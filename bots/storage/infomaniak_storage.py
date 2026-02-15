@@ -1,5 +1,5 @@
-import os
 import logging
+import os
 
 from django.core.files.base import ContentFile
 from django.core.files.storage import Storage
