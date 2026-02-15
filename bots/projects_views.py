@@ -749,7 +749,7 @@ class CreateCheckoutSessionView(LoginRequiredMixin, ProjectUrlContextMixin, View
 
 class CreateBotView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def post(self, request, object_id):
-        logger.debug(f"Creating bot...")
+        logger.debug("Creating bot...")
         try:
             logger.debug("Getting project for user...")
             project = get_project_for_user(user=request.user, project_object_id=object_id)

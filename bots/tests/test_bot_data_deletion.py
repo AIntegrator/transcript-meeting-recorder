@@ -1,5 +1,5 @@
 import uuid
-from unittest.mock import PropertyMock, patch
+from unittest.mock import patch
 
 from django.core.files.base import ContentFile
 from django.test import TransactionTestCase

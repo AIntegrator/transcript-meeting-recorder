@@ -1,4 +1,5 @@
 import logging
+
 import sentry_sdk
 from django.conf import settings
 from sentry_sdk.integrations.django import DjangoIntegration

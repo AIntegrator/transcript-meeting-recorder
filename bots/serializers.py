@@ -4,8 +4,6 @@ import logging
 import os
 from dataclasses import asdict
 
-from django.conf import settings
-
 logger = logging.getLogger(__name__)
 
 import jsonschema
