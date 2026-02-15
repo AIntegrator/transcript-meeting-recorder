@@ -13,7 +13,6 @@ def init_sentry():
         sentry_sdk.init(
             dsn=settings.SENTRY_DSN,
             send_default_pii=True,
-
             # By setting this option, Sentry will capture information about Django requests
             integrations=[
                 DjangoIntegration(),

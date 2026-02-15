@@ -114,16 +114,17 @@ NewlyCreatedBotExample = OpenApiExample(
 @extend_schema(exclude=True)
 class RecordStartedView(APIView):
     """Webhook endpoint called when recording has started"""
+
     authentication_classes = [ApiKeyAuthentication]
 
     def post(self, request):
         transcript_id = request.data.get("transcript_id")
         if not transcript_id:
             return Response({"error": "transcript_id is required"}, status=status.HTTP_400_BAD_REQUEST)
-        
+
         logger = logging.getLogger(__name__)
         logger.info(f"Recording started notification received for transcript_id: {transcript_id}")
-        
+
         try:
             response = started_recording(transcript_id)
             response.raise_for_status()
@@ -137,16 +138,17 @@ class RecordStartedView(APIView):
 @extend_schema(exclude=True)
 class RecordDoneView(APIView):
     """Webhook endpoint called when recording is complete"""
+
     authentication_classes = [ApiKeyAuthentication]
 
     def post(self, request):
         transcript_id = request.data.get("transcript_id")
         if not transcript_id:
             return Response({"error": "transcript_id is required"}, status=status.HTTP_400_BAD_REQUEST)
-        
+
         logger = logging.getLogger(__name__)
         logger.info(f"Recording done notification received for transcript_id: {transcript_id}")
-        
+
         try:
             response = start_transcription(transcript_id)
             response.raise_for_status()
@@ -160,16 +162,17 @@ class RecordDoneView(APIView):
 @extend_schema(exclude=True)
 class RecordFailedView(APIView):
     """Webhook endpoint called when recording has failed"""
+
     authentication_classes = [ApiKeyAuthentication]
 
     def post(self, request):
         transcript_id = request.data.get("transcript_id")
         if not transcript_id:
             return Response({"error": "transcript_id is required"}, status=status.HTTP_400_BAD_REQUEST)
-        
+
         logger = logging.getLogger(__name__)
         logger.error(f"Recording failed notification received for transcript_id: {transcript_id}")
-        
+
         try:
             response = could_not_record(transcript_id)
             response.raise_for_status()

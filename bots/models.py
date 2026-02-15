@@ -1530,6 +1530,7 @@ class Recording(models.Model):
     """
     Represents a recording of a bot session.
     """
+
     bot = models.ForeignKey(Bot, on_delete=models.CASCADE, related_name="recordings")
 
     # The format of the recording (AUDIO_AND_VIDEO or AUDIO_ONLY), see RecordingTypes class
@@ -2221,6 +2222,7 @@ class BotChatMessageRequestManager:
             raise ValueError(f"Invalid state transition. Chat message request {chat_message_request.id} is in state {chat_message_request.get_state_display()}")
         chat_message_request.state = BotChatMessageRequestStates.FAILED
         chat_message_request.save()
+
 
 class BotDebugScreenshotStorage(InfomaniakSwiftStorage):
     pass

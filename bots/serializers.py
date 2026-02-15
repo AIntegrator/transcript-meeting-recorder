@@ -1393,7 +1393,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
         # Sanitize the filename - remove invalid characters
         sanitized = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", str(value))
         # Collapse multiple underscores and spaces to single underscores
-        sanitized = re.sub(r'[_\s]+', "_", sanitized).strip("_.")
+        sanitized = re.sub(r"[_\s]+", "_", sanitized).strip("_.")
 
         # Limit length to reasonable size (240 chars - space for extension)
         sanitized = sanitized[:200]
@@ -1673,6 +1673,7 @@ class ParticipantEventSerializer(serializers.Serializer):
 class PatchBotSerializer(BotValidationMixin, serializers.Serializer):
     join_at = serializers.DateTimeField(help_text="The time the bot should join the meeting. ISO 8601 format, e.g. 2025-06-13T12:00:00Z", required=False)
     meeting_url = serializers.CharField(help_text="The URL of the meeting to join, e.g. https://zoom.us/j/123?pwd=456", required=False)
+
 
 class AsyncTranscriptionSerializer(serializers.ModelSerializer):
     bot_id = serializers.SerializerMethodField()

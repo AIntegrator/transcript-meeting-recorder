@@ -118,10 +118,12 @@ def get_transcription_via_deepgram(utterance):
 
     return utterance, None
 
+
 def get_transcription_via_openai(utterance):
     logger.error("Removed by Lia to stay lean.")
 
     return utterance, None
+
 
 def get_transcription_via_assemblyai(utterance):
     logger.error("Removed by Lia to stay lean.")
