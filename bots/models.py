@@ -1241,7 +1241,7 @@ class BotEventManager:
         if in_progress_recordings.count() > 1:
             raise ValidationError(f"Expected at most one in progress recording for bot {bot.object_id} in state {BotStates.state_to_api_code(new_state)}, but found {in_progress_recordings.count()}")
         for recording in in_progress_recordings:
-            RecordingManager.terminate_recording(recording)
+            RecordingManager.terminate_recording(recording, event_type=event_type)
         for failed_transcription_recording in bot.recordings.filter(transcription_state=RecordingTranscriptionStates.FAILED):
             # Collect all transcription errors
             if failed_transcription_recording.transcription_failure_data and failed_transcription_recording.transcription_failure_data.get("failure_reasons"):
@@ -1589,10 +1589,14 @@ class RecordingManager:
     # If the transcription failed, then mark it as failed
     # If the transcription succeeded, then mark it as succeeded
     @classmethod
-    def terminate_recording(cls, recording: Recording):
+    def terminate_recording(cls, recording: Recording, event_type: int = None):
         if recording.state == RecordingStates.IN_PROGRESS or recording.state == RecordingStates.PAUSED:
+            # If the bot encountered a fatal error, mark the recording as failed regardless of file existence.
+            # A file may exist from partial writes/buffering, but the recording was interrupted abnormally.
+            if event_type == BotEventTypes.FATAL_ERROR:
+                RecordingManager.set_recording_failed(recording)
             # If we don't have a recording file AND we intended to generate one, then it failed.
-            if recording.file or recording.bot.recording_type() == RecordingTypes.NO_RECORDING:
+            elif recording.file or recording.bot.recording_type() == RecordingTypes.NO_RECORDING:
                 RecordingManager.set_recording_complete(recording)
             else:
                 RecordingManager.set_recording_failed(recording)
