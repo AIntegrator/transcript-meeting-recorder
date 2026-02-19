@@ -10,6 +10,7 @@ from .models import (
     TranscriptionProviders,
 )
 
+
 def pcm_to_mp3(
     pcm_data: bytes,
     sample_rate: int = 32000,

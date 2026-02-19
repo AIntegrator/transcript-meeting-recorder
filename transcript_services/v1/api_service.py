@@ -1,7 +1,7 @@
+import logging
 import os
 
 import requests
-import logging
 
 # Setup logging
 logger = logging.getLogger(__name__)
