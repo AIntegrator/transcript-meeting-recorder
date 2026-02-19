@@ -5,7 +5,6 @@ import uuid
 from enum import Enum
 
 import redis
-from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.urls import reverse

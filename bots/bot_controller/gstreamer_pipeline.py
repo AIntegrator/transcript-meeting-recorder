@@ -5,6 +5,7 @@ import logging
 import time
 
 from gi.repository import GLib, Gst
+
 from bots.utils import create_black_i420_frame, create_zero_pcm_audio
 
 # Set up the logging configuration

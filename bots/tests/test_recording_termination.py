@@ -2,7 +2,7 @@
 Unit tests for RecordingManager.terminate_recording() method.
 Tests the fix for properly handling recording status when a pod dies (FATAL_ERROR).
 """
-from unittest.mock import PropertyMock, patch
+from unittest.mock import patch
 
 from django.core.files.base import ContentFile
 from django.test import TransactionTestCase

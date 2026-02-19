@@ -4,12 +4,12 @@ Data models for Projects, Calendars, Bots, and related entities.
 
 import hashlib
 import json
+import logging
 import math
 import os
 import random
 import secrets
 import string
-import logging
 
 from concurrency.exceptions import RecordModifiedError
 from concurrency.fields import IntegerVersionField
