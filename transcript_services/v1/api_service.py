@@ -2,6 +2,7 @@ import os
 
 import requests
 import logging
+import sentry_sdk
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -98,7 +99,14 @@ def started_recording(transcript_id):
 
 
 def could_not_record(transcript_id):
+    """Report recording failure to gateway. Triggers Sentry alert."""
     logger.error(f"Could not record for transcript ID: {transcript_id}")
+    
+    # Trigger Sentry alert
+    sentry_sdk.capture_message(
+        f"Recording failed for transcript {transcript_id}",
+        level="error"
+    )
 
     # API credentials
     api_key = os.getenv("TRANSCRIPT_API_KEY")
@@ -122,13 +130,53 @@ def could_not_record(transcript_id):
     data = {"transcript_id": transcript_id}
 
     # Send POST request
-    response = requests.post(url, headers=headers, json=data)
+    response = requests.post(url, headers=headers, json=data, timeout=30)
 
     # Check if request was successful
     if response.status_code == 200:
-        print(f"Successfully informed of recording failure for UUID: {transcript_id}")
+        logger.info(f"Successfully informed of recording failure for UUID: {transcript_id}")
     else:
-        print(f"Error informing of recording failure: {response.status_code}")
-        print(f"Response: {response.text}")
+        logger.error(f"Error informing of recording failure: {response.status_code}")
+        logger.error(f"Response: {response.text}")
+
+    return response
+
+
+def permission_denied(transcript_id: str) -> requests.Response:
+    """Report recording permission denied to gateway. Triggers Sentry alert."""
+    logger.error(f"Recording permission denied for transcript ID: {transcript_id}")
+    
+    # Trigger Sentry alert for dev team
+    sentry_sdk.capture_message(
+        f"Recording permission denied for transcript {transcript_id}",
+        level="error"
+    )
+    
+    api_key = os.getenv("TRANSCRIPT_API_KEY")
+    if not api_key:
+        raise ValueError("API key is not set in environment variables.")
+
+    base_url = os.getenv("TRANSCRIPT_API_URL")
+    if not base_url:
+        raise ValueError("API URL is not set in environment variables.")
+
+    url = f"{base_url}/api/v1/record/permission_denied"
+    
+    headers = {
+        "x-api-key": api_key,
+        "Content-Type": "application/json",
+    }
+
+    response = requests.post(
+        url,
+        headers=headers,
+        json={"transcript_id": transcript_id},
+        timeout=30
+    )
+
+    if response.status_code == 200:
+        logger.info(f"Reported permission denied to gateway for transcript: {transcript_id}")
+    else:
+        logger.error(f"Failed to report permission denied to gateway: {response.status_code}")
 
     return response
