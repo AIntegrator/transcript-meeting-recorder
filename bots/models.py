@@ -1560,6 +1560,8 @@ class Recording(models.Model):
 
     file = models.FileField(storage=RecordingStorage())
 
+    transcript_id = models.CharField(max_length=255, null=True, blank=True, help_text="ID from gateway for tracking transcription")
+
     def __str__(self):
         return f"Recording for {self.bot.object_id}"
 

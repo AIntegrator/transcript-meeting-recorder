@@ -189,6 +189,7 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
                 transcription_type=TranscriptionTypes.NON_REALTIME,
                 transcription_provider=transcription_provider_from_bot_creation_data(serializer.validated_data),
                 is_default_recording=True,
+                transcript_id=recording_file_name,
             )
 
             if bot_image:
