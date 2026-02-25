@@ -371,6 +371,11 @@ class BotController:
         else:
             return f"{recording.object_id}.{self.bot_in_db.recording_format()}"
 
+    def get_transcript_id(self):
+        """Get the transcript ID from the recording. This ID comes from the gateway."""
+        recording = Recording.objects.get(bot=self.bot_in_db, is_default_recording=True)
+        return recording.transcript_id or recording.object_id
+
     def on_rtmp_connection_failed(self):
         logger.info("RTMP connection failed")
         BotEventManager.create_event(
@@ -379,6 +384,10 @@ class BotController:
             event_sub_type=BotEventSubTypes.FATAL_ERROR_RTMP_CONNECTION_FAILED,
             event_metadata={"rtmp_destination_url": self.bot_in_db.rtmp_destination_url()},
         )
+        try:
+            transcript_api_service.could_not_record(self.get_transcript_id(), reason="RTMP connection failed")
+        except Exception as e:
+            logger.error(f"Failed to report to gateway: {e}")
         self.cleanup()
 
     def on_new_sample_from_gstreamer_pipeline(self, data):
@@ -448,13 +457,15 @@ class BotController:
             logger.info("Telling file uploader to upload recording file...")
             logger.info("recording_file_name: %s", self.get_recording_filename())
 
-            # Get the transcript ID from the recording filename
-            transcript_id = self.get_recording_filename().split(".")[0]
+
 
             # Check if the file exists and is not empty
             if os.path.getsize(self.get_recording_file_location()) == 0:
                 logger.info("Recording file is empty, not uploading")
-                transcript_api_service.could_not_record(transcript_id)
+                try:
+                    transcript_api_service.could_not_record(self.get_transcript_id(), reason="Recording file is empty")
+                except Exception as e:
+                    logger.error(f"Failed to report to gateway: {e}")
                 return
 
             logger.info("Uploading file to Swift...")
@@ -469,7 +480,7 @@ class BotController:
                 logger.info("File uploader finished uploading file successfully.")
 
                 # After a successful upload, call the Transcript API to transcribe the file
-                logger.info("Transcript ID: %s", transcript_id)
+                logger.info("Transcript ID: %s", self.get_transcript_id())
                 try:
                     logger.info("Sending transcription request...")
                     transcript_api_service.start_transcription(transcript_id)
@@ -484,7 +495,7 @@ class BotController:
             else:
                 logger.error("File uploader failed to upload file. Not starting transcription or deleting local file.")
                 try:
-                    transcript_api_service.could_not_record(transcript_id)
+                    transcript_api_service.could_not_record(self.get_transcript_id(), reason="File upload failed")
                 except Exception as e:
                     logger.error(f"Could not call could_not_record API: {e}")
 
@@ -899,6 +910,7 @@ class BotController:
                 event_type=BotEventTypes.FATAL_ERROR,
                 event_sub_type=BotEventSubTypes.FATAL_ERROR_PROCESS_TERMINATED,
             )
+            transcript_api_service.could_not_record(self.get_transcript_id(), reason="Process terminated")
         except Exception as e:
             logger.info(f"Error creating FATAL_ERROR event: {e}")
 
@@ -1052,8 +1064,8 @@ class BotController:
                 bot=self.bot_in_db,
                 event_type=BotEventTypes.FATAL_ERROR,
                 event_sub_type=BotEventSubTypes.FATAL_ERROR_ATTENDEE_INTERNAL_ERROR,
-                event_metadata={"error": str(e)},
             )
+            transcript_api_service.could_not_record(self.get_transcript_id(), reason="Internal error in callback")
         except Exception as e:
             logger.info(f"Error in handle_exception_in_timeout_callback: {e}")
             logger.info("Traceback:")
@@ -1319,6 +1331,10 @@ class BotController:
                 event_type=BotEventTypes.COULD_NOT_JOIN,
                 event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_REQUEST_TO_JOIN_DENIED,
             )
+            try:
+                transcript_api_service.could_not_record(self.get_transcript_id(), reason="Request to join denied")
+            except Exception as e:
+                logger.error(f"Failed to report to gateway: {e}")
             self.cleanup()
             return
 
@@ -1329,6 +1345,10 @@ class BotController:
                 event_type=BotEventTypes.COULD_NOT_JOIN,
                 event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_UNABLE_TO_CONNECT_TO_MEETING,
             )
+            try:
+                transcript_api_service.could_not_record(self.get_transcript_id(), reason="Could not connect to meeting")
+            except Exception as e:
+                logger.error(f"Failed to report to gateway: {e}")
             self.cleanup()
             return
 
@@ -1339,6 +1359,10 @@ class BotController:
                 event_type=BotEventTypes.COULD_NOT_JOIN,
                 event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_MEETING_NOT_FOUND,
             )
+            try:
+                transcript_api_service.could_not_record(self.get_transcript_id(), reason="Meeting not found")
+            except Exception as e:
+                logger.error(f"Failed to report to gateway: {e}")
             self.cleanup()
             return
 
@@ -1349,6 +1373,10 @@ class BotController:
                 event_type=BotEventTypes.COULD_NOT_JOIN,
                 event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_LOGIN_REQUIRED,
             )
+            try:
+                transcript_api_service.could_not_record(self.get_transcript_id(), reason="Login required")
+            except Exception as e:
+                logger.error(f"Failed to report to gateway: {e}")
             self.cleanup()
             return
 
@@ -1359,6 +1387,10 @@ class BotController:
                 event_type=BotEventTypes.COULD_NOT_JOIN,
                 event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_BOT_LOGIN_ATTEMPT_FAILED,
             )
+            try:
+                transcript_api_service.could_not_record(self.get_transcript_id(), reason="Login attempt failed")
+            except Exception as e:
+                logger.error(f"Failed to report to gateway: {e}")
             self.cleanup()
             return
 
@@ -1377,6 +1409,10 @@ class BotController:
                         "bot_restarts_exceeded_max_retries": True,
                     },
                 )
+                try:
+                    transcript_api_service.could_not_record(self.get_transcript_id(), reason="UI element not found")
+                except Exception as e:
+                    logger.error(f"Failed to report to gateway: {e}")
                 self.cleanup()
                 return
 
@@ -1434,6 +1470,10 @@ class BotController:
                         save=True,
                     )
 
+            try:
+                transcript_api_service.could_not_record(self.get_transcript_id(), reason="UI element not found during meeting")
+            except Exception as e:
+                logger.error(f"Failed to report to gateway: {e}")
             self.cleanup()
             return
 
@@ -1470,6 +1510,10 @@ class BotController:
                 event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_UNPUBLISHED_ZOOM_APP,
                 event_metadata={"zoom_result_code": str(message.get("zoom_result_code"))},
             )
+            try:
+                transcript_api_service.could_not_record(self.get_transcript_id(), reason="Zoom: Unable to join external meeting")
+            except Exception as e:
+                logger.error(f"Failed to report to gateway: {e}")
             self.cleanup()
             return
 
@@ -1481,6 +1525,10 @@ class BotController:
                 event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_ZOOM_MEETING_STATUS_FAILED,
                 event_metadata={"zoom_result_code": str(message.get("zoom_result_code"))},
             )
+            try:
+                transcript_api_service.could_not_record(self.get_transcript_id(), reason="Zoom: Meeting status failed")
+            except Exception as e:
+                logger.error(f"Failed to report to gateway: {e}")
             self.cleanup()
             return
 
@@ -1492,6 +1540,10 @@ class BotController:
                 event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_ZOOM_AUTHORIZATION_FAILED,
                 event_metadata={"zoom_result_code": str(message.get("zoom_result_code"))},
             )
+            try:
+                transcript_api_service.could_not_record(self.get_transcript_id(), reason="Zoom: Authorization failed")
+            except Exception as e:
+                logger.error(f"Failed to report to gateway: {e}")
             self.cleanup()
             return
 
@@ -1503,6 +1555,10 @@ class BotController:
                 event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_ZOOM_SDK_INTERNAL_ERROR,
                 event_metadata={"zoom_result_code": str(message.get("zoom_result_code"))},
             )
+            try:
+                transcript_api_service.could_not_record(self.get_transcript_id(), reason="Zoom: SDK internal error")
+            except Exception as e:
+                logger.error(f"Failed to report to gateway: {e}")
             self.cleanup()
             return
 
@@ -1513,6 +1569,10 @@ class BotController:
                 event_type=BotEventTypes.COULD_NOT_JOIN,
                 event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_WAITING_ROOM_TIMEOUT_EXCEEDED,
             )
+            try:
+                transcript_api_service.could_not_record(self.get_transcript_id(), reason="Waiting room timeout exceeded")
+            except Exception as e:
+                logger.error(f"Failed to report to gateway: {e}")
             self.cleanup()
             return
 
@@ -1523,6 +1583,10 @@ class BotController:
                 event_type=BotEventTypes.COULD_NOT_JOIN,
                 event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_NOT_STARTED_WAITING_FOR_HOST,
             )
+            try:
+                transcript_api_service.could_not_record(self.get_transcript_id(), reason="Meeting not started, waiting for host")
+            except Exception as e:
+                logger.error(f"Failed to report to gateway: {e}")
             self.cleanup()
             return
 
@@ -1566,8 +1630,7 @@ class BotController:
 
             # Notify the gateway that recording has started
             try:
-                transcript_id = self.get_recording_filename().split(".")[0]
-                transcript_api_service.started_recording(transcript_id)
+                transcript_api_service.started_recording(self.get_transcript_id())
             except Exception as e:
                 logger.error(f"Failed to notify gateway that recording started: {e}")
 
@@ -1597,6 +1660,10 @@ class BotController:
                 event_type=BotEventTypes.BOT_RECORDING_PERMISSION_DENIED,
                 event_sub_type=event_sub_type_for_permission_denied,
             )
+            try:
+                transcript_api_service.permission_denied(self.get_transcript_id())
+            except Exception as e:
+                logger.error(f"Failed to report to gateway: {e}")
             return
 
         raise Exception(f"Received unexpected message from bot adapter: {message}")

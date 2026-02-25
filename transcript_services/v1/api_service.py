@@ -98,15 +98,20 @@ def started_recording(transcript_id):
     return response
 
 
-def could_not_record(transcript_id):
-    """Report recording failure to gateway. Triggers Sentry alert."""
-    logger.error(f"Could not record for transcript ID: {transcript_id}")
+def could_not_record(transcript_id, reason=None):
+    """Report recording failure to gateway. Triggers Sentry alert.
+    Args:
+        transcript_id (str): The ID of the transcript
+        reason (str, optional): Specific reason for failure (e.g., 'Could not connect to meeting')
+    """
+    error_msg = f"Recording failed for transcript {transcript_id}"
+    if reason:
+        error_msg += f": {reason}"
     
-    # Trigger Sentry alert
-    sentry_sdk.capture_message(
-        f"Recording failed for transcript {transcript_id}",
-        level="error"
-    )
+    logger.error(error_msg)
+    
+    # Trigger Sentry alert for dev team with specific reason
+    sentry_sdk.capture_message(error_msg, level="error")
 
     # API credentials
     api_key = os.getenv("TRANSCRIPT_API_KEY")
@@ -144,13 +149,7 @@ def could_not_record(transcript_id):
 
 def permission_denied(transcript_id: str) -> requests.Response:
     """Report recording permission denied to gateway. Triggers Sentry alert."""
-    logger.error(f"Recording permission denied for transcript ID: {transcript_id}")
-    
-    # Trigger Sentry alert for dev team
-    sentry_sdk.capture_message(
-        f"Recording permission denied for transcript {transcript_id}",
-        level="error"
-    )
+    logger.info(f"Recording permission denied by user for transcript ID: {transcript_id}")
     
     api_key = os.getenv("TRANSCRIPT_API_KEY")
     if not api_key:
