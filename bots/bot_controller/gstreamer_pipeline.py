@@ -1,10 +1,15 @@
 import gi
 
-gi.require_version("Gst", "1.0")
 import logging
 import time
 
-from gi.repository import GLib, Gst
+try:
+    gi.require_version("Gst", "1.0")
+    from gi.repository import GLib, Gst
+except (ImportError, ValueError):
+    GLib = None
+    Gst = None
+
 from bots.utils import create_black_i420_frame, create_zero_pcm_audio
 
 # Set up the logging configuration
@@ -54,6 +59,8 @@ class GstreamerPipeline:
         self.pause_timer_id = None
 
         # Initialize GStreamer
+        if Gst is None or GLib is None:
+            raise RuntimeError("GStreamer runtime is not available in this environment")
         Gst.init(None)
 
         self.queue_drops = {}

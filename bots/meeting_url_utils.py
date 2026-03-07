@@ -1,7 +1,7 @@
 import base64
 import json
 import re
-from urllib.parse import parse_qs, unquote, urlparse, urlunparse
+from urllib.parse import parse_qs, parse_qsl, unquote, urlencode, urlparse, urlunparse
 
 import tldextract
 
@@ -64,6 +64,58 @@ def meeting_type_from_url(url):
 
 def normalize_teams_url(conversation_id, message_id, tenant_id, organizer_id):
     return f'https://teams.microsoft.com/l/meetup-join/{conversation_id}/{message_id}?context={{"Tid":"{tenant_id}","Oid":"{organizer_id}"}}'
+
+
+def _normalize_webex_url(url: str):
+    parsed_url = urlparse(url)
+    if not parsed_url.scheme:
+        parsed_url = urlparse(f"https://{url}")
+
+    host = parsed_url.netloc.lower()
+    path = re.sub(r"/+", "/", parsed_url.path or "/")
+    parsed_query_items = parse_qsl(parsed_url.query, keep_blank_values=False)
+
+    # Keep meeting-relevant params while stripping common trackers.
+    allowed_params = {"pwd", "password", "psk", "pin", "data", "mtid", "launchapp"}
+    filtered_query_items = []
+    for key, value in parsed_query_items:
+        lowered_key = key.lower()
+        if lowered_key.startswith("utm_"):
+            continue
+        if lowered_key in {"trackingid", "trk", "spm"}:
+            continue
+        if lowered_key in allowed_params:
+            filtered_query_items.append((key, value))
+
+    is_instant_connect = host == "instant.webex.com" and path.startswith("/gen/v1")
+    is_standard_webex_host = host.endswith(".webex.com")
+    if not is_instant_connect and not is_standard_webex_host:
+        return None, None
+
+    if is_instant_connect:
+        normalized_url = urlunparse(("https", host, path, "", urlencode(filtered_query_items), ""))
+        return MeetingTypes.WEBEX, normalized_url
+
+    # /j/<meeting_id> and /join/<meeting_id> become canonical /j/<meeting_id>
+    j_or_join_match = re.match(r"^/(?:j|join)/(\d+)(?:/.*)?$", path)
+    if j_or_join_match:
+        canonical_path = f"/j/{j_or_join_match.group(1)}"
+    else:
+        # Personal room and webapp URLs keep their route.
+        personal_room_match = re.match(r"^/meet/([A-Za-z0-9._-]+)(?:/.*)?$", path)
+        webapp_collab_match = re.match(r"^/webapp/collab(?:/.*)?$", path)
+        if personal_room_match:
+            canonical_path = f"/meet/{personal_room_match.group(1)}"
+        elif webapp_collab_match:
+            canonical_path = "/webapp/collab"
+        else:
+            return None, None
+
+    # Force browser join in headless environments.
+    filtered_query_items = [(k, v) for (k, v) in filtered_query_items if k.lower() != "launchapp"]
+    filtered_query_items.append(("launchApp", "false"))
+    normalized_url = urlunparse(("https", host, canonical_path, "", urlencode(filtered_query_items), ""))
+    return MeetingTypes.WEBEX, normalized_url
 
 
 def normalize_meeting_url(url):
@@ -228,5 +280,9 @@ def normalize_meeting_url_raw(url):
                 # Create canonical URL format using the extracted domain
                 canonical_url = f"https://teams.{domain}/meet/{meeting_id}?p={passcode}"
                 return MeetingTypes.TEAMS, canonical_url
+
+    webex_meeting_type, webex_normalized_url = _normalize_webex_url(url)
+    if webex_meeting_type and webex_normalized_url:
+        return webex_meeting_type, webex_normalized_url
 
     return None, None

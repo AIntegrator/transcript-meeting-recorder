@@ -1032,7 +1032,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
     }
 
     def validate_meeting_url(self, value):
-        meeting_type = meeting_type_from_url(value)
+        meeting_type, normalized_url = normalize_meeting_url(value)
         if meeting_type is None:
             raise serializers.ValidationError("Invalid meeting URL")
 
@@ -1040,7 +1040,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             if not value.startswith("https://meet.google.com/"):
                 raise serializers.ValidationError("Google Meet URL must start with https://meet.google.com/")
 
-        return value
+        return normalized_url
 
     transcription_settings = TranscriptionSettingsJSONField(
         help_text="The transcription settings for the bot, e.g. {'deepgram': {'language': 'en'}}",
@@ -1064,6 +1064,10 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
                 value = {"meeting_closed_captions": {}}
             elif meeting_type == MeetingTypes.TEAMS:
                 value = {"meeting_closed_captions": {}}
+            elif meeting_type == MeetingTypes.WEBEX:
+                # Webex support currently relies on browser automation and does not
+                # expose native caption hooks in the same way as Meet/Teams.
+                value = {"deepgram": {"language": "multi"}}
             else:
                 return None
 

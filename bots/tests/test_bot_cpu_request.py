@@ -118,6 +118,21 @@ class TestBotCpuRequest(TestCase):
         mock_getenv.assert_any_call("TEAMS_AUDIO_ONLY_BOT_CPU_REQUEST", "4")
 
     @patch("bots.models.os.getenv")
+    def test_webex_audio_video_cpu_request(self, mock_getenv):
+        """Test CPU request for Webex with audio and video recording"""
+        mock_getenv.side_effect = lambda key, default=None: {
+            "WEBEX_AUDIO_AND_VIDEO_BOT_CPU_REQUEST": "9",
+            "BOT_CPU_REQUEST": "4",
+        }.get(key, default)
+
+        bot = self.create_bot("https://acme.webex.com/j/123456789")
+
+        result = bot.cpu_request()
+
+        self.assertEqual(result, "9")
+        mock_getenv.assert_any_call("WEBEX_AUDIO_AND_VIDEO_BOT_CPU_REQUEST", "4")
+
+    @patch("bots.models.os.getenv")
     def test_unknown_meeting_type_fallback(self, mock_getenv):
         """Test CPU request fallback for unknown meeting type"""
         mock_getenv.side_effect = lambda key, default=None: {

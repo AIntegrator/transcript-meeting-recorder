@@ -33,6 +33,11 @@ class TestValidateMeetingUrlAndCredentials(TestCase):
         error = validate_meeting_url_and_credentials("https://teams.microsoft.com/meeting/123", self.project)
         self.assertIsNone(error)
 
+    def test_validate_webex_url(self):
+        """Test Webex URL validation"""
+        error = validate_meeting_url_and_credentials("https://acme.webex.com/j/123456789", self.project)
+        self.assertIsNone(error)
+
 
 class TestCreateBot(TestCase):
     def setUp(self):
@@ -93,6 +98,17 @@ class TestCreateBot(TestCase):
         self.assertEqual(events.count(), 1)
         self.assertEqual(events.first().metadata["source"], BotCreationSource.API)
         self.assertEqual(events.first().event_type, BotEventTypes.JOIN_REQUESTED)
+
+    def test_create_webex_bot_with_default_settings(self):
+        bot, error = create_bot(
+            data={"meeting_url": "https://acme.webex.com/j/123456789?trackingId=xyz", "bot_name": "Webex Bot"},
+            source=BotCreationSource.API,
+            project=self.project,
+        )
+        self.assertIsNotNone(bot)
+        self.assertIsNotNone(bot.recordings.first())
+        self.assertIsNone(error)
+        self.assertEqual(bot.recordings.first().transcription_provider, TranscriptionProviders.DEEPGRAM)
 
     def test_create_bot_with_google_meet_url_with_http(self):
         bot, error = create_bot(data={"meeting_url": "http://meet.google.com/abc-defg-hij", "bot_name": "Test Bot"}, source=BotCreationSource.DASHBOARD, project=self.project)
