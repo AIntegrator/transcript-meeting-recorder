@@ -30,7 +30,9 @@ class WebexUIMethods:
     GUEST_NAME_INPUT_XPATH = (
         "//input[contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'name') "
         "or contains(translate(@placeholder, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'name') "
-        "or ((@type='text' or not(@type)) and not(@type='hidden'))]"
+        "or @autocomplete='name']"
+        "|//*[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'name (required)')]/following::input[1]"
+        "|//label[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'name')]/following::input[1]"
     )
     JOIN_AS_GUEST_SELECTOR_CANDIDATES = [
         (
@@ -58,6 +60,85 @@ class WebexUIMethods:
             "//a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'join as a guest')]",
         ),
     ]
+    _webex_form_context_idx = None
+
+    def install_external_protocol_guard(self):
+        guard_script = """
+        (() => {
+          if (window.__webexExternalProtocolGuardInstalled) return;
+          window.__webexExternalProtocolGuardInstalled = true;
+          window.__webexGuardBlockedUrls = window.__webexGuardBlockedUrls || [];
+          const lower = (v) => (v || '').toString().trim().toLowerCase();
+          const isAllowed = (url) => {
+            try {
+              const parsed = new URL(url, window.location.href);
+              const protocol = lower(parsed.protocol);
+              return protocol === 'http:' || protocol === 'https:' || protocol === 'about:' || protocol === 'blob:' || protocol === 'data:';
+            } catch (e) {
+              return true;
+            }
+          };
+
+          const wrapLocationMethod = (name) => {
+            const original = window.location[name] ? window.location[name].bind(window.location) : null;
+            if (!original) return;
+            window.location[name] = (url) => {
+              if (url && !isAllowed(url)) {
+                window.__webexGuardBlockedUrls.push({ source: 'location.' + name, url: String(url) });
+                console.debug('[webex-guard] blocked location.' + name, url);
+                return;
+              }
+              return original(url);
+            };
+          };
+          wrapLocationMethod('assign');
+          wrapLocationMethod('replace');
+
+          const originalOpen = window.open ? window.open.bind(window) : null;
+          if (originalOpen) {
+            window.open = (url, ...args) => {
+              if (url && !isAllowed(url)) {
+                window.__webexGuardBlockedUrls.push({ source: 'window.open', url: String(url) });
+                console.debug('[webex-guard] blocked window.open', url);
+                return null;
+              }
+              return originalOpen(url, ...args);
+            };
+          }
+
+          const stopIfExternal = (rawUrl, event) => {
+            if (!rawUrl) return false;
+            if (isAllowed(rawUrl)) return false;
+            if (event) {
+              event.preventDefault();
+              event.stopImmediatePropagation();
+            }
+            window.__webexGuardBlockedUrls.push({ source: 'link_activation', url: String(rawUrl) });
+            console.debug('[webex-guard] blocked external link activation', rawUrl);
+            return true;
+          };
+
+          document.addEventListener('click', (event) => {
+            const target = event.target && event.target.closest ? event.target.closest('a[href],button[data-href]') : null;
+            if (!target) return;
+            const href = target.getAttribute('href') || target.getAttribute('data-href');
+            stopIfExternal(href, event);
+          }, true);
+        })();
+        """
+        try:
+            self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": guard_script})
+            self.driver.execute_script(guard_script)
+            logger.info("Installed external protocol guard for Webex pages")
+        except Exception as e:
+            logger.info(f"Failed to install external protocol guard: {e.__class__.__name__}")
+
+    def log_external_protocol_guard_state(self, label):
+        try:
+            blocked = self.driver.execute_script("return (window.__webexGuardBlockedUrls || []).slice(-10);")
+            logger.info(f"[webex-guard:{label}] blocked_urls={blocked}")
+        except Exception as e:
+            logger.info(f"[webex-guard:{label}] failed_to_read_state error={e.__class__.__name__}")
 
     def locate_element(self, step, condition, wait_time_seconds=60):
         try:
@@ -102,6 +183,316 @@ class WebexUIMethods:
             return None
         except Exception:
             return None
+
+    def _switch_to_context(self, context_idx):
+        self.driver.switch_to.default_content()
+        if context_idx is None:
+            return True
+        try:
+            iframe_elements = self.driver.find_elements(By.TAG_NAME, "iframe")
+            if context_idx >= len(iframe_elements):
+                return False
+            self.driver.switch_to.frame(iframe_elements[context_idx])
+            return True
+        except Exception:
+            self.driver.switch_to.default_content()
+            return False
+
+    def _iter_context_indices(self):
+        self.driver.switch_to.default_content()
+        iframe_count = len(self.driver.find_elements(By.TAG_NAME, "iframe"))
+        contexts = [None]
+        contexts.extend(range(iframe_count))
+        return contexts
+
+    def _find_visible_element_in_any_context(self, selector_type, selector, preferred_context_idx=None):
+        contexts = self._iter_context_indices()
+        if preferred_context_idx in contexts:
+            contexts = [preferred_context_idx] + [ctx for ctx in contexts if ctx != preferred_context_idx]
+
+        for context_idx in contexts:
+            if not self._switch_to_context(context_idx):
+                continue
+            try:
+                elements = self.driver.find_elements(selector_type, selector)
+            except Exception:
+                continue
+            for element in elements:
+                try:
+                    if element.is_displayed():
+                        return element, context_idx
+                except Exception:
+                    continue
+        self.driver.switch_to.default_content()
+        return None, None
+
+    def click_visible_button_by_text_in_any_context(self, text, preferred_context_idx=None):
+        text_lower = text.lower()
+        xpath = (
+            "//button[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '"
+            + text_lower
+            + "')]"
+            "|//*[@role='button' and contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '"
+            + text_lower
+            + "')]"
+        )
+        element, context_idx = self._find_visible_element_in_any_context(By.XPATH, xpath, preferred_context_idx)
+        if element is None:
+            return False
+        if not self._switch_to_context(context_idx):
+            return False
+        try:
+            disabled_attr = (element.get_attribute("disabled") or "").lower()
+            aria_disabled = (element.get_attribute("aria-disabled") or "").lower()
+            is_disabled = disabled_attr in {"true", "disabled"} or aria_disabled == "true"
+            if is_disabled:
+                return False
+            try:
+                self.click_element(element, f"button_text_{text_lower}")
+            except Exception:
+                ActionChains(self.driver).move_to_element(element).click().perform()
+            logger.info(f"Clicked visible button by text='{text_lower}' in context={context_idx}")
+            self._webex_form_context_idx = context_idx
+            return True
+        finally:
+            try:
+                self.driver.switch_to.default_content()
+            except Exception:
+                pass
+
+    def _click_shadow_button_by_text_in_current_context(self, text):
+        text_lower = text.lower()
+        try:
+            result = self.driver.execute_script(
+                """
+                const targetText = arguments[0];
+                const lower = (v) => (v || '').toString().trim().toLowerCase();
+                const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                const roots = [document];
+                const nodes = [];
+                while (roots.length) {
+                  const root = roots.shift();
+                  const all = root.querySelectorAll('*');
+                  for (const el of all) {
+                    nodes.push(el);
+                    if (el.shadowRoot) roots.push(el.shadowRoot);
+                  }
+                }
+
+                const clickables = nodes.filter((el) => {
+                  const tag = lower(el.tagName);
+                  const role = lower(el.getAttribute('role'));
+                  const type = lower(el.getAttribute('type'));
+                  const clickable = tag === 'button' || tag === 'a' || role === 'button' || (tag === 'input' && (type === 'submit' || type === 'button'));
+                  return clickable && isVisible(el);
+                });
+                const candidate = clickables.find((el) => {
+                  const txt = lower((el.innerText || el.textContent || el.value || '') + ' ' + (el.getAttribute('aria-label') || ''));
+                  return txt.includes(targetText);
+                });
+                if (!candidate) return { clicked: false, reason: 'not_found' };
+
+                const disabledAttr = lower(candidate.getAttribute('disabled'));
+                const ariaDisabled = lower(candidate.getAttribute('aria-disabled'));
+                const disabled = disabledAttr === 'true' || disabledAttr === 'disabled' || ariaDisabled === 'true' || !!candidate.disabled;
+                if (disabled) return { clicked: false, reason: 'disabled' };
+
+                candidate.click();
+                return { clicked: true };
+                """,
+                text_lower,
+            )
+            return bool(result and result.get("clicked"))
+        except Exception:
+            return False
+
+    def click_shadow_button_by_text_in_any_context(self, text, preferred_context_idx=None):
+        contexts = self._iter_context_indices()
+        if preferred_context_idx in contexts:
+            contexts = [preferred_context_idx] + [ctx for ctx in contexts if ctx != preferred_context_idx]
+        for context_idx in contexts:
+            if not self._switch_to_context(context_idx):
+                continue
+            try:
+                if self._click_shadow_button_by_text_in_current_context(text):
+                    logger.info(f"Clicked shadow button by text='{text.lower()}' in context={context_idx}")
+                    self._webex_form_context_idx = context_idx
+                    return True
+            finally:
+                try:
+                    self.driver.switch_to.default_content()
+                except Exception:
+                    pass
+        return False
+
+    def click_any_visible_text_target_in_any_context(self, text, preferred_context_idx=None):
+        text_lower = text.lower()
+        contexts = self._iter_context_indices()
+        if preferred_context_idx in contexts:
+            contexts = [preferred_context_idx] + [ctx for ctx in contexts if ctx != preferred_context_idx]
+        for context_idx in contexts:
+            if not self._switch_to_context(context_idx):
+                continue
+            try:
+                result = self.driver.execute_script(
+                    """
+                    const targetText = arguments[0];
+                    const lower = (v) => (v || '').toString().trim().toLowerCase();
+                    const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+
+                    const all = Array.from(document.querySelectorAll('*'))
+                      .filter((el) => isVisible(el));
+                    const candidates = all.filter((el) => {
+                      const txt = lower(el.innerText || el.textContent || '');
+                      return txt.includes(targetText);
+                    });
+                    if (!candidates.length) return { clicked: false };
+
+                    const scored = candidates
+                      .map((el) => {
+                        const tag = lower(el.tagName);
+                        const role = lower(el.getAttribute('role'));
+                        const txt = lower(el.innerText || el.textContent || '');
+                        const isButtonLike = tag === 'button' || tag === 'a' || role === 'button';
+                        const hasDisabled = lower(el.getAttribute('disabled')) === 'true' || lower(el.getAttribute('aria-disabled')) === 'true' || !!el.disabled;
+                        const score = (isButtonLike ? 1000 : 0) - (hasDisabled ? 500 : 0) - txt.length;
+                        return { el, score, hasDisabled, txt };
+                      })
+                      .sort((a, b) => b.score - a.score);
+
+                    const chosen = scored.find((c) => !c.hasDisabled) || scored[0];
+                    if (!chosen || chosen.hasDisabled) return { clicked: false };
+                    chosen.el.click();
+                    return { clicked: true, text: chosen.txt.slice(0, 120) };
+                    """,
+                    text_lower,
+                )
+                if result and result.get("clicked"):
+                    logger.info(f"Clicked visible text target='{text_lower}' in context={context_idx}; result={result}")
+                    self._webex_form_context_idx = context_idx
+                    return True
+            finally:
+                try:
+                    self.driver.switch_to.default_content()
+                except Exception:
+                    pass
+        return False
+
+    def _find_name_input_in_current_context(self):
+        selectors = [
+            (By.CSS_SELECTOR, "input[data-test='Name (required)']"),
+            (By.CSS_SELECTOR, "input[autocomplete='name']"),
+            (
+                By.XPATH,
+                "//*[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'name (required)')]/following::input[1]",
+            ),
+        ]
+        for selector_type, selector in selectors:
+            try:
+                candidates = self.driver.find_elements(selector_type, selector)
+            except Exception:
+                continue
+            for candidate in candidates:
+                try:
+                    if candidate.is_displayed() and candidate.is_enabled():
+                        return candidate
+                except Exception:
+                    continue
+        return None
+
+    def _trigger_name_blur_sequence_in_current_context(self):
+        name_input = self._find_name_input_in_current_context()
+        if not name_input:
+            return False
+        try:
+            name_input.click()
+            name_input.send_keys(Keys.CONTROL, "a")
+            name_input.send_keys(self.display_name)
+            # Tab out to trigger client-side validation that enables Join.
+            name_input.send_keys(Keys.TAB)
+            time.sleep(0.2)
+            try:
+                body = self.driver.find_element(By.TAG_NAME, "body")
+                body.click()
+            except Exception:
+                self.driver.execute_script("if (document.activeElement) { document.activeElement.blur(); }")
+            logger.info("Triggered name-input blur/unfocus sequence")
+            return True
+        except Exception as e:
+            logger.info(f"Failed name blur sequence: {e.__class__.__name__}")
+            return False
+
+    def _ensure_name_input_populated_in_current_context(self, join_button=None):
+        try:
+            result = self.driver.execute_script(
+                """
+                const joinBtn = arguments[0] || null;
+                const displayName = arguments[1];
+                const lower = (v) => (v || '').toString().trim().toLowerCase();
+                const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+
+                const allVisibleInputs = Array.from(document.querySelectorAll("input:not([type='hidden'])"))
+                  .filter((el) => isVisible(el) && !el.disabled);
+                if (!allVisibleInputs.length) return { filled: false, reason: 'no_visible_inputs' };
+
+                const directSelectors = [
+                  "input[data-test='Name (required)']",
+                  "input[data-test*='Name']",
+                  "input[autocomplete='name']",
+                ];
+                let byDirectSelector = null;
+                for (const selector of directSelectors) {
+                  const candidate = Array.from(document.querySelectorAll(selector))
+                    .find((el) => isVisible(el) && !el.disabled);
+                  if (candidate) {
+                    byDirectSelector = candidate;
+                    break;
+                  }
+                }
+
+                const byLabel = allVisibleInputs.find((el) => {
+                  const attrs = lower(el.getAttribute('aria-label')) + ' ' + lower(el.getAttribute('placeholder')) + ' ' + lower(el.getAttribute('name')) + ' ' + lower(el.getAttribute('data-test'));
+                  return attrs.includes('name');
+                });
+
+                let byLayout = null;
+                if (joinBtn && isVisible(joinBtn)) {
+                  const jr = joinBtn.getBoundingClientRect();
+                  byLayout = allVisibleInputs.find((el) => {
+                    const r = el.getBoundingClientRect();
+                    const roughlyAboveJoin = r.bottom <= (jr.top + 90);
+                    const horizontallyAligned = Math.abs(r.left - jr.left) < 120;
+                    return roughlyAboveJoin && horizontallyAligned;
+                  }) || null;
+                }
+
+                const target = byDirectSelector || byLabel || byLayout || allVisibleInputs[0];
+                const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                if (setter) setter.call(target, '');
+                else target.value = '';
+                target.dispatchEvent(new Event('input', { bubbles: true }));
+
+                if (setter) setter.call(target, displayName);
+                else target.value = displayName;
+                target.dispatchEvent(new Event('input', { bubbles: true }));
+                target.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'x' }));
+                target.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'x' }));
+                target.dispatchEvent(new Event('change', { bubbles: true }));
+                target.blur();
+
+                return {
+                  filled: (target.value || '').trim().length > 0,
+                  value_after: target.value || '',
+                  strategy: byDirectSelector ? 'direct_selector' : (byLabel ? 'label' : (byLayout ? 'layout' : 'first_visible')),
+                };
+                """,
+                join_button,
+                self.display_name,
+            )
+            logger.info(f"Name-input populate result: {result}")
+            return bool(result and result.get("filled"))
+        except Exception:
+            return False
 
     def capture_flow_screenshot(self, label):
         if os.getenv("WEBEX_FLOW_SCREENSHOTS", "false").lower() != "true":
@@ -423,6 +814,87 @@ class WebexUIMethods:
         logger.info("Strict 'Join from this browser' click not available")
         return False
 
+    def click_join_from_browser_shadow_dom(self):
+        logger.info("Trying shadow-DOM-aware click for browser-entry button")
+        try:
+            result = self.driver.execute_script(
+                """
+                const lower = (v) => (v || '').toString().trim().toLowerCase();
+                const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                const isDisabled = (el) => !!(el.disabled || el.getAttribute('aria-disabled') === 'true');
+
+                const roots = [document];
+                const all = [];
+                while (roots.length) {
+                  const root = roots.shift();
+                  const nodes = root.querySelectorAll('*');
+                  for (const n of nodes) {
+                    all.push(n);
+                    if (n.shadowRoot) roots.push(n.shadowRoot);
+                  }
+                }
+
+                const candidates = [];
+                for (const el of all) {
+                  const tag = lower(el.tagName);
+                  const role = lower(el.getAttribute('role'));
+                  const type = lower(el.getAttribute('type'));
+                  const clickable =
+                    tag === 'button' ||
+                    tag === 'a' ||
+                    role === 'button' ||
+                    (tag === 'input' && (type === 'submit' || type === 'button'));
+                  if (!clickable || !isVisible(el) || isDisabled(el)) continue;
+
+                  const text = lower(
+                    (el.innerText || el.textContent || el.value || '') + ' ' + (el.getAttribute('aria-label') || '')
+                  );
+                  let score = -1;
+                  if (text.includes('join from this browser')) score = 300;
+                  else if (text.includes('join from your browser')) score = 250;
+                  else if (text.includes('join from browser')) score = 200;
+                  if (score < 0) continue;
+                  if (text.includes('download')) score -= 100;
+
+                  const rect = el.getBoundingClientRect();
+                  candidates.push({
+                    el,
+                    text: text.slice(0, 120),
+                    score,
+                    top: rect.top || 0,
+                    left: rect.left || 0,
+                  });
+                }
+
+                candidates.sort((a, b) => {
+                  if (b.score !== a.score) return b.score - a.score;
+                  if (a.top !== b.top) return a.top - b.top;
+                  return a.left - b.left;
+                });
+
+                if (!candidates.length) {
+                  return { clicked: false, candidate_count: 0 };
+                }
+
+                const chosen = candidates[0];
+                chosen.el.scrollIntoView({ block: 'center' });
+                chosen.el.click();
+                return {
+                  clicked: true,
+                  candidate_count: candidates.length,
+                  chosen_text: chosen.text,
+                  chosen_score: chosen.score,
+                  chosen_href: chosen.el.getAttribute('href') || null,
+                  chosen_onclick: chosen.el.getAttribute('onclick') || null,
+                };
+                """
+            )
+            logger.info(f"Shadow-DOM browser-entry click result: {result}")
+            return bool(result and result.get("clicked"))
+        except Exception as e:
+            logger.info(f"Shadow-DOM browser-entry click failed: {e.__class__.__name__}")
+            return False
+
     def navigate_to_post_landing_page_if_available(self):
         try:
             extended_data_raw = self.driver.execute_script(
@@ -521,29 +993,41 @@ class WebexUIMethods:
 
     def dismiss_external_app_prompt_if_present(self):
         # Webex may trigger a browser-level "open application" prompt which is not part of page DOM.
-        # The "Cancel" button is usually focused; Enter confirms cancel. ESC is a fallback.
+        # Do NOT press Enter first here because that can confirm opening xdg-open on some builds.
+        # Prefer dismiss/cancel semantics (alert dismiss + ESC), then proceed with browser-join flow.
         try:
-            ActionChains(self.driver).send_keys(Keys.ENTER).perform()
-            time.sleep(0.2)
-            ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
-            logger.info("Attempted to cancel external-app launch prompt via ENTER/ESC")
+            try:
+                alert = self.driver.switch_to.alert
+                alert.dismiss()
+                logger.info("Dismissed external-app prompt via browser alert dismiss")
+            except Exception:
+                pass
+
+            for _ in range(3):
+                ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
+                time.sleep(0.15)
+                ActionChains(self.driver).key_down(Keys.SHIFT).send_keys(Keys.TAB).key_up(Keys.SHIFT).perform()
+                time.sleep(0.1)
+                ActionChains(self.driver).send_keys(Keys.ENTER).perform()
+                time.sleep(0.1)
+                ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
+                time.sleep(0.1)
+
+            logger.info("Attempted to cancel external-app launch prompt via ESC + SHIFT+TAB + ENTER strategy")
         except Exception as prompt_error:
             logger.info(f"Could not dismiss external-app prompt: {prompt_error.__class__.__name__}")
 
     def fill_guest_details(self):
         logger.info("Locating guest details form fields")
-        name_input = self.locate_element(
-            step="guest_name_input",
-            condition=EC.presence_of_element_located(
-                (
-                    By.XPATH,
-                    self.GUEST_NAME_INPUT_XPATH,
-                )
-            ),
-            wait_time_seconds=10,
-        )
+        name_input, context_idx = self._find_visible_element_in_any_context(By.XPATH, self.GUEST_NAME_INPUT_XPATH, self._webex_form_context_idx)
+        if name_input is None:
+            raise UiCouldNotLocateElementException("Exception raised in locate_element for guest_name_input", "guest_name_input")
+        self._webex_form_context_idx = context_idx
+        if not self._switch_to_context(context_idx):
+            raise UiCouldNotLocateElementException("Could not switch to guest form context", "guest_name_input")
         name_input.clear()
         name_input.send_keys(self.display_name)
+        name_input.send_keys(Keys.TAB)
         logger.info("Filled guest display name field")
 
         email = os.getenv("WEBEX_BOT_GUEST_EMAIL", "webex-bot@example.com")
@@ -560,6 +1044,7 @@ class WebexUIMethods:
             logger.info("Filled guest email field")
         else:
             logger.info("Guest email field not present; proceeding with name-only form")
+        self.driver.switch_to.default_content()
 
     def turn_off_media_inputs(self):
         microphone_button = self.find_element_by_selector(
@@ -661,21 +1146,176 @@ class WebexUIMethods:
 
     def click_join_meeting_button(self):
         logger.info("Trying to locate and click final 'Join meeting' button")
-        join_button = self.locate_element(
-            step="join_meeting_button",
-            condition=EC.presence_of_element_located(
-                (
-                    By.XPATH,
-                    (
-                        "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'join meeting')]"
-                        "|//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'join')]"
-                    ),
-                )
-            ),
-            wait_time_seconds=20,
-        )
-        logger.info("Join meeting button located; clicking")
-        self.click_element(join_button, "join_meeting_button")
+        deadline = time.time() + 20
+        last_prompt_cancel_at = 0
+        last_blur_attempt_at = 0
+        while time.time() < deadline:
+            contexts = self._iter_context_indices()
+            if self._webex_form_context_idx in contexts:
+                contexts = [self._webex_form_context_idx] + [ctx for ctx in contexts if ctx != self._webex_form_context_idx]
+
+            for context_idx in contexts:
+                now = time.time()
+                if now - last_prompt_cancel_at >= 6:
+                    self.driver.switch_to.default_content()
+                    self.dismiss_external_app_prompt_if_present()
+                    last_prompt_cancel_at = now
+                if not self._switch_to_context(context_idx):
+                    continue
+                try:
+                    name_fill_result = self.driver.execute_script(
+                        """
+                        const displayName = arguments[0];
+                        const lower = (v) => (v || '').toString().trim().toLowerCase();
+                        const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                        const roots = [document];
+                        const nodes = [];
+                        while (roots.length) {
+                          const root = roots.shift();
+                          const all = root.querySelectorAll('*');
+                          for (const el of all) {
+                            nodes.push(el);
+                            if (el.shadowRoot) roots.push(el.shadowRoot);
+                          }
+                        }
+
+                        const visibleInputs = nodes
+                          .filter((el) => lower(el.tagName) === 'input' && isVisible(el) && !el.disabled && lower(el.getAttribute('type')) !== 'hidden');
+                        const nameInput = visibleInputs.find((el) => {
+                          const attrs =
+                            lower(el.getAttribute('data-test')) + ' ' +
+                            lower(el.getAttribute('autocomplete')) + ' ' +
+                            lower(el.getAttribute('aria-label')) + ' ' +
+                            lower(el.getAttribute('placeholder')) + ' ' +
+                            lower(el.getAttribute('name'));
+                          return attrs.includes('name');
+                        }) || visibleInputs[0] || null;
+
+                        if (nameInput) {
+                          const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                          if (setter) setter.call(nameInput, '');
+                          else nameInput.value = '';
+                          nameInput.dispatchEvent(new Event('input', { bubbles: true }));
+                          if (setter) setter.call(nameInput, displayName);
+                          else nameInput.value = displayName;
+                          nameInput.dispatchEvent(new Event('input', { bubbles: true }));
+                          nameInput.dispatchEvent(new Event('change', { bubbles: true }));
+                          nameInput.blur();
+                        }
+
+                        const clickables = nodes.filter((el) => {
+                          const tag = lower(el.tagName);
+                          const role = lower(el.getAttribute('role'));
+                          const type = lower(el.getAttribute('type'));
+                          const clickable = tag === 'button' || tag === 'a' || role === 'button' || (tag === 'input' && (type === 'submit' || type === 'button'));
+                          return clickable && isVisible(el);
+                        });
+                        return {
+                          name_input_found: !!nameInput,
+                          name_value: nameInput ? (nameInput.value || '') : null,
+                          name_rect: nameInput ? (() => {
+                            const r = nameInput.getBoundingClientRect();
+                            return { top: r.top, left: r.left, bottom: r.bottom, right: r.right };
+                          })() : null,
+                        };
+                        """,
+                        self.display_name,
+                    )
+
+                    join_probe = self.driver.execute_script(
+                        """
+                        const lower = (v) => (v || '').toString().trim().toLowerCase();
+                        const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                        const roots = [document];
+                        const nodes = [];
+                        while (roots.length) {
+                          const root = roots.shift();
+                          const all = root.querySelectorAll('*');
+                          for (const el of all) {
+                            nodes.push(el);
+                            if (el.shadowRoot) roots.push(el.shadowRoot);
+                          }
+                        }
+
+                        const clickables = nodes.filter((el) => {
+                          const tag = lower(el.tagName);
+                          const role = lower(el.getAttribute('role'));
+                          const type = lower(el.getAttribute('type'));
+                          const clickable = tag === 'button' || tag === 'a' || role === 'button' || (tag === 'input' && (type === 'submit' || type === 'button'));
+                          return clickable && isVisible(el);
+                        });
+                        const joinCandidates = clickables.filter((el) => {
+                          const txt = lower((el.innerText || el.textContent || el.value || '') + ' ' + (el.getAttribute('aria-label') || ''));
+                          return txt.includes('join meeting') || txt === 'join' || txt.startsWith('join ');
+                        });
+                        if (!joinCandidates.length) return { found: false };
+
+                        const nameRect = arguments[0];
+                        const score = (el) => {
+                          const r = el.getBoundingClientRect();
+                          if (!nameRect) return Math.abs(r.top) + Math.abs(r.left);
+                          const verticalDelta = Math.max(0, r.top - nameRect.bottom);
+                          const horizontalDelta = Math.abs(r.left - nameRect.left);
+                          const abovePenalty = r.top < nameRect.bottom ? 10000 : 0;
+                          return abovePenalty + (verticalDelta * 2) + horizontalDelta;
+                        };
+                        joinCandidates.sort((a, b) => score(a) - score(b));
+                        const chosen = joinCandidates[0];
+                        const rect = chosen.getBoundingClientRect();
+                        const disabledAttr = lower(chosen.getAttribute('disabled'));
+                        const ariaDisabled = lower(chosen.getAttribute('aria-disabled'));
+                        const disabled = disabledAttr === 'true' || disabledAttr === 'disabled' || ariaDisabled === 'true' || !!chosen.disabled;
+                        return {
+                          found: true,
+                          disabled,
+                          center_x: rect.left + (rect.width / 2),
+                          center_y: rect.top + (rect.height / 2),
+                          text: lower(chosen.innerText || chosen.textContent || chosen.value || ''),
+                        };
+                        """,
+                        (name_fill_result or {}).get("name_rect"),
+                    )
+
+                    if not join_probe or not join_probe.get("found"):
+                        now = time.time()
+                        if now - last_blur_attempt_at >= 1.5:
+                            self._trigger_name_blur_sequence_in_current_context()
+                            last_blur_attempt_at = now
+                        continue
+
+                    if join_probe.get("disabled"):
+                        logger.info(
+                            f"Join meeting button still disabled in context={context_idx}; "
+                            f"name_fill_result={name_fill_result}; join_probe={join_probe}"
+                        )
+                        self._webex_form_context_idx = context_idx
+                        now = time.time()
+                        if now - last_blur_attempt_at >= 1.5:
+                            self._trigger_name_blur_sequence_in_current_context()
+                            last_blur_attempt_at = now
+                        continue
+
+                    x = float(join_probe.get("center_x"))
+                    y = float(join_probe.get("center_y"))
+                    self.driver.execute_cdp_cmd("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y, "button": "left"})
+                    self.driver.execute_cdp_cmd("Input.dispatchMouseEvent", {"type": "mousePressed", "x": x, "y": y, "button": "left", "clickCount": 1})
+                    self.driver.execute_cdp_cmd("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": x, "y": y, "button": "left", "clickCount": 1})
+                    logger.info(
+                        f"Join meeting clicked via CDP mouse event in context={context_idx}; "
+                        f"name_fill_result={name_fill_result}; join_probe={join_probe}"
+                    )
+                    self._webex_form_context_idx = context_idx
+                    self.driver.switch_to.default_content()
+                    return
+                except Exception as click_js_error:
+                    logger.info(f"JS join attempt failed in context={context_idx}: {click_js_error.__class__.__name__}")
+                finally:
+                    try:
+                        self.driver.switch_to.default_content()
+                    except Exception:
+                        pass
+            time.sleep(0.5)
+        raise UiCouldNotLocateElementException("Timed out waiting for enabled join meeting button", "join_meeting_button")
 
     def _try_fill_name_and_click_join_meeting_direct_in_current_context(self):
         return self.driver.execute_script(
@@ -820,17 +1460,50 @@ class WebexUIMethods:
     def wait_until_joined_or_timeout(self):
         logger.info("Waiting for joined state by polling leave button visibility")
         waiting_room_timeout_started_at = time.time()
+        leave_button_xpath = (
+            "//button[contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'leave')]"
+            "|//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'leave meeting')]"
+        )
+        last_wait_debug_capture_at = 0
+        last_retry_click_at = 0
         while True:
-            leave_button = self.find_element_by_selector(
-                By.XPATH,
-                (
-                    "//button[contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'leave')]"
-                    "|//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'leave meeting')]"
-                ),
-            )
+            leave_button, _ = self._find_visible_element_in_any_context(By.XPATH, leave_button_xpath, self._webex_form_context_idx)
             if leave_button:
                 logger.info("Leave button detected; joined state confirmed")
+                self.driver.switch_to.default_content()
                 return
+
+            # Webex sometimes lands on recoverable transient overlays after clicking join.
+            self.click_visible_button_by_text_in_any_context("got it", self._webex_form_context_idx)
+            self.click_shadow_button_by_text_in_any_context("got it", self._webex_form_context_idx)
+            self.click_any_visible_text_target_in_any_context("got it", self._webex_form_context_idx)
+            if self.click_visible_button_by_text_in_any_context("try again", self._webex_form_context_idx) or self.click_shadow_button_by_text_in_any_context("try again", self._webex_form_context_idx):
+                logger.info("Clicked 'Try again' while waiting for joined state")
+            elif self.click_any_visible_text_target_in_any_context("try again", self._webex_form_context_idx):
+                logger.info("Clicked generic 'Try again' target while waiting for joined state")
+
+            now = time.time()
+            if now - last_retry_click_at >= 8:
+                if self.click_visible_button_by_text_in_any_context("join meeting", self._webex_form_context_idx) or self.click_shadow_button_by_text_in_any_context("join meeting", self._webex_form_context_idx):
+                    logger.info("Re-clicked 'Join meeting' while waiting for joined state")
+                    last_retry_click_at = now
+
+            if now - last_wait_debug_capture_at >= 15:
+                last_wait_debug_capture_at = now
+                timestamp = int(now * 1000)
+                screenshots_dir = "/tmp/screenshots"
+                os.makedirs(screenshots_dir, exist_ok=True)
+                try:
+                    screenshot_path = f"{screenshots_dir}/webex_wait_join_{timestamp}.png"
+                    self.driver.save_screenshot(screenshot_path)
+                    logger.info(f"Captured wait-until-joined screenshot: {screenshot_path}")
+                except Exception as screenshot_error:
+                    logger.info(f"Failed to capture wait-until-joined screenshot: {screenshot_error.__class__.__name__}")
+                try:
+                    ui_signals = self.collect_ui_signals()
+                    logger.info(f"wait_until_joined ui_signals={ui_signals}")
+                except Exception as ui_signal_error:
+                    logger.info(f"Failed to collect wait-until-joined ui_signals: {ui_signal_error.__class__.__name__}")
 
             self.check_for_denied_join("wait_until_joined")
             self.check_for_meeting_not_found("wait_until_joined")
@@ -853,6 +1526,7 @@ class WebexUIMethods:
             return
 
         logger.info(f"Navigating to Webex meeting URL: {self.meeting_url}")
+        self.install_external_protocol_guard()
         self.driver.get(self.meeting_url)
         # region agent log
         self._debug_emit(
@@ -890,8 +1564,11 @@ class WebexUIMethods:
 
         self.dismiss_cookie_banner_if_present()
         self.capture_flow_screenshot("after_cookie_dismiss_1")
+        self.dismiss_external_app_prompt_if_present()
         try:
             clicked_browser_entry = self.click_join_from_this_browser_strict()
+            if not clicked_browser_entry:
+                clicked_browser_entry = self.click_join_from_browser_shadow_dom()
             if not clicked_browser_entry:
                 clicked_browser_entry = self.click_optional_continue_in_browser()
             if not clicked_browser_entry:
@@ -904,10 +1581,12 @@ class WebexUIMethods:
             self.capture_flow_screenshot("continue_in_browser_exception")
             raise
         self.capture_flow_screenshot("after_continue_in_browser_attempt")
+        self.log_external_protocol_guard_state("after_continue_in_browser")
         self.dismiss_external_app_prompt_if_present()
         post_browser_entry_settle_seconds = int(os.getenv("WEBEX_POST_BROWSER_ENTRY_SETTLE_SECONDS", "12"))
         logger.info(f"Waiting {post_browser_entry_settle_seconds}s for post-browser-entry page transition")
         time.sleep(post_browser_entry_settle_seconds)
+        self.log_external_protocol_guard_state("after_settle")
 
         try:
             if self.try_fill_name_and_click_join_meeting_direct():
@@ -925,21 +1604,23 @@ class WebexUIMethods:
             self.capture_flow_screenshot("guest_form_direct_path")
         except UiCouldNotLocateElementException:
             logger.info("Direct guest form not available, trying postLandingPage fallback before guest-gate path")
-            navigated_to_landing = self.navigate_to_post_landing_page_if_available()
-            if navigated_to_landing:
-                self.capture_flow_screenshot("after_post_landing_navigation")
+            use_post_landing_fallback = os.getenv("WEBEX_USE_POST_LANDING_FALLBACK", "false").lower() == "true"
+            if use_post_landing_fallback:
+                navigated_to_landing = self.navigate_to_post_landing_page_if_available()
+                if navigated_to_landing:
+                    self.capture_flow_screenshot("after_post_landing_navigation")
+                    self.fill_guest_details()
+
+            allow_join_as_guest_fallback = os.getenv("WEBEX_ALLOW_JOIN_AS_GUEST_FALLBACK", "false").lower() == "true"
+            if allow_join_as_guest_fallback:
+                logger.info("Attempting join-as-guest gate path")
+                self.click_join_as_guest()
+                self.dismiss_cookie_banner_if_present()
+                self.capture_flow_screenshot("after_join_as_guest_attempt")
                 self.fill_guest_details()
             else:
-                allow_join_as_guest_fallback = os.getenv("WEBEX_ALLOW_JOIN_AS_GUEST_FALLBACK", "false").lower() == "true"
-                if allow_join_as_guest_fallback:
-                    logger.info("postLandingPage fallback unavailable, attempting join-as-guest gate path")
-                    self.click_join_as_guest()
-                    self.dismiss_cookie_banner_if_present()
-                    self.capture_flow_screenshot("after_join_as_guest_attempt")
-                    self.fill_guest_details()
-                else:
-                    logger.info("Could not reach direct guest form; join-as-guest fallback disabled")
-                    raise
+                logger.info("Could not reach direct guest form; optional fallbacks are disabled")
+                raise
         self.turn_off_media_inputs()
         self.click_join_meeting_button()
         self.wait_until_joined_or_timeout()

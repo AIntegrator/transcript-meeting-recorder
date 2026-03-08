@@ -666,6 +666,11 @@ class WebBotAdapter(BotAdapter):
                 "webex": True,
                 "webexteams": True,
                 "wbx": True,
+                "cisco-spark": True,
+                "ciscospark": True,
+                "spark": True,
+                "wbxmtg": True,
+                "webexmtg": True,
             },
         }
         options.add_experimental_option("prefs", prefs)
