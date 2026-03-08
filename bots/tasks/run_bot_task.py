@@ -12,9 +12,18 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(name)s - %(levelname)s - %(message)s", level=logging.DEBUG)
 
 
+def _is_debug_mode_enabled():
+    return str(os.getenv("DEBUG", "false")).lower() in {"1", "true", "yes", "on"}
+
+
 @shared_task(bind=True, soft_time_limit=3600)
 def run_bot(self, bot_id):
     logger.info(f"Running bot {bot_id}")
+    if _is_debug_mode_enabled():
+        logger.info("==============================================================")
+        logger.info("============== RUNNING BOT IN DEBUG MODE =====================")
+        logger.info("============== DEBUG RETRIES + DEBUG RECORDING ON ============")
+        logger.info("==============================================================")
     logger.debug("Initializing BotController...")
     bot_controller = BotController(bot_id)
     logger.debug("Bot Controller initialized.")

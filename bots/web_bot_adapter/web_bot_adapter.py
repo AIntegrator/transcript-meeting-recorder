@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 
 
 class WebBotAdapter(BotAdapter):
+    DEBUG_TRACE_LOG_PATH = "/Users/vanyabrucker/src/transcript-meeting-recorder/.cursor/debug-2a4d04.log"
+    DEBUG_TRACE_LOG_PATH_CONTAINER = "/attendee/.cursor/debug-2a4d04.log"
+    DEBUG_TRACE_SESSION_ID = "2a4d04"
+
     def __init__(
         self,
         *,
@@ -70,6 +74,7 @@ class WebBotAdapter(BotAdapter):
         self.video_frame_size = video_frame_size
 
         self.driver = None
+        self.driver_unhealthy = False
 
         self.send_frames = True
 
@@ -107,6 +112,40 @@ class WebBotAdapter(BotAdapter):
         self.webpage_streamer_service_hostname = webpage_streamer_service_hostname
 
         self.webpage_streamer_keepalive_task = None
+        self.debug_run_id = f"bot-{int(time.time() * 1000)}"
+
+    # region agent log
+    def _debug_emit(self, hypothesis_id: str, location: str, message: str, data: dict):
+        try:
+            payload = {
+                "sessionId": self.DEBUG_TRACE_SESSION_ID,
+                "runId": self.debug_run_id,
+                "hypothesisId": hypothesis_id,
+                "location": location,
+                "message": message,
+                "data": data,
+                "timestamp": int(time.time() * 1000),
+            }
+            payload_json = json.dumps(payload, ensure_ascii=True) + "\n"
+            wrote_log = False
+            write_errors = []
+            for log_path in [self.DEBUG_TRACE_LOG_PATH, self.DEBUG_TRACE_LOG_PATH_CONTAINER]:
+                try:
+                    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+                    with open(log_path, "a", encoding="utf-8") as debug_log_file:
+                        debug_log_file.write(payload_json)
+                    wrote_log = True
+                    logger.info(f"Debug instrumentation wrote NDJSON log to {log_path}")
+                    break
+                except Exception as e:
+                    write_errors.append({"path": log_path, "error_type": e.__class__.__name__, "error": str(e)})
+                    continue
+            if not wrote_log:
+                logger.warning(f"Debug instrumentation failed to write NDJSON log file: {write_errors}")
+        except Exception:
+            pass
+
+    # endregion
 
     def pause_recording(self):
         self.recording_paused = True
@@ -386,6 +425,79 @@ class WebBotAdapter(BotAdapter):
     def send_incorrect_password_message(self):
         self.send_message_callback({"message": self.Messages.COULD_NOT_CONNECT_TO_MEETING})
 
+    def _is_driver_timeout_failure(self, exception, inner_exception):
+        candidates = [exception, inner_exception]
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            candidate_type = candidate.__class__.__name__
+            candidate_message = str(candidate)
+            if candidate_type in {"ReadTimeoutError", "MaxRetryError"}:
+                return True
+            if "Read timed out" in candidate_message or "Max retries exceeded" in candidate_message:
+                return True
+        return False
+
+    def _mark_driver_unhealthy_if_needed(self, exception, inner_exception):
+        candidates = [exception, inner_exception]
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            candidate_type = candidate.__class__.__name__
+            candidate_message = str(candidate).lower()
+            if candidate_type in {"ReadTimeoutError", "MaxRetryError", "InvalidSessionIdException", "ProtocolError"}:
+                self.driver_unhealthy = True
+                return
+            if "invalid session id" in candidate_message or "browser has closed the connection" in candidate_message:
+                self.driver_unhealthy = True
+                return
+
+    def _stop_debug_screen_recorder_if_running(self, reason):
+        if not self.debug_screen_recorder:
+            return
+        start_ts = time.time()
+        logger.info(f"Stopping debug screen recorder early. reason={reason}")
+        # region agent log
+        self._debug_emit(
+            "H14",
+            "web_bot_adapter.py:_stop_debug_screen_recorder_if_running",
+            "Stopping debug recorder",
+            {"reason": reason},
+        )
+        # endregion
+        try:
+            self.debug_screen_recorder.stop()
+            elapsed_ms = int((time.time() - start_ts) * 1000)
+            output_path = BotAdapter.DEBUG_RECORDING_FILE_PATH
+            output_exists = os.path.exists(output_path)
+            output_size = os.path.getsize(output_path) if output_exists else 0
+            logger.info(
+                f"Debug recorder stopped. reason={reason} elapsed_ms={elapsed_ms} output_exists={output_exists} output_size={output_size}"
+            )
+            # region agent log
+            self._debug_emit(
+                "H14",
+                "web_bot_adapter.py:_stop_debug_screen_recorder_if_running",
+                "Stopped debug recorder",
+                {
+                    "reason": reason,
+                    "elapsed_ms": elapsed_ms,
+                    "output_exists": output_exists,
+                    "output_size": output_size,
+                },
+            )
+            # endregion
+        except Exception as e:
+            logger.info(f"Error stopping debug recorder early. reason={reason} error={e.__class__.__name__}")
+            # region agent log
+            self._debug_emit(
+                "H14",
+                "web_bot_adapter.py:_stop_debug_screen_recorder_if_running",
+                "Failed stopping debug recorder",
+                {"reason": reason, "error_type": e.__class__.__name__},
+            )
+            # endregion
+
     def send_debug_screenshot_message(self, step, exception, inner_exception):
         """
         Send a debug screenshot message to the callback function.
@@ -398,18 +510,104 @@ class WebBotAdapter(BotAdapter):
         Returns: None
 
         """
-        logger.info("Capturing debug screenshot...")
         current_time = datetime.datetime.now()
         timestamp = current_time.strftime("%Y%m%d_%H%M%S")
-        screenshot_path = f"/tmp/ui_element_not_found_{timestamp}.png"
+        screenshots_dir = "/tmp/screenshots"
+        os.makedirs(screenshots_dir, exist_ok=True)
+
+        html_file_path = f"{screenshots_dir}/failure_context_{timestamp}.html"
         try:
+            if self._is_driver_timeout_failure(exception, inner_exception):
+                html_content = (
+                    "<html><body>"
+                    f"<h3>webdriver_timeout_failure</h3>"
+                    f"<p>step={step}</p>"
+                    f"<p>exception_type={exception.__class__.__name__ if exception else 'none'}</p>"
+                    f"<p>inner_exception_type={inner_exception.__class__.__name__ if inner_exception else 'none'}</p>"
+                    f"<p>meeting_url_hint={self.meeting_url}</p>"
+                    "</body></html>"
+                )
+            else:
+                html_content = self.driver.page_source
+            with open(html_file_path, "w", encoding="utf-8") as html_file:
+                html_file.write(html_content)
+            html_size = os.path.getsize(html_file_path) if os.path.exists(html_file_path) else 0
+            logger.info(f"Failure HTML context saved: path={html_file_path} size_bytes={html_size}")
+            # region agent log
+            self._debug_emit(
+                "H18",
+                "web_bot_adapter.py:send_debug_screenshot_message",
+                "Failure HTML context saved",
+                {"step": step, "html_file_path": html_file_path, "size_bytes": html_size},
+            )
+            # endregion
+        except Exception as html_error:
+            logger.info(f"Failure HTML context save failed: {html_error}")
+            html_file_path = None
+
+        if self._is_driver_timeout_failure(exception, inner_exception):
+            logger.info(
+                f"Skipping debug screenshot capture due to webdriver timeout state. step={step} "
+                f"exception={exception.__class__.__name__ if exception else None} "
+                f"inner_exception={inner_exception.__class__.__name__ if inner_exception else None}"
+            )
+            # region agent log
+            self._debug_emit(
+                "H15",
+                "web_bot_adapter.py:send_debug_screenshot_message",
+                "Skipped screenshot due to webdriver timeout state",
+                {
+                    "step": step,
+                    "exception_type": exception.__class__.__name__ if exception else None,
+                    "inner_exception_type": inner_exception.__class__.__name__ if inner_exception else None,
+                },
+            )
+            # endregion
+            self.send_message_callback(
+                {
+                    "message": self.Messages.UI_ELEMENT_NOT_FOUND,
+                    "step": step,
+                    "current_time": current_time,
+                    "mhtml_file_path": None,
+                    "html_file_path": html_file_path,
+                    "screenshot_path": None,
+                    "exception_type": exception.__class__.__name__ if exception else "exception_not_available",
+                    "exception_message": exception.__str__() if exception else "exception_message_not_available",
+                    "inner_exception_type": inner_exception.__class__.__name__ if inner_exception else "inner_exception_not_available",
+                    "inner_exception_message": inner_exception.__str__() if inner_exception else "inner_exception_message_not_available",
+                }
+            )
+            return
+
+        logger.info("Capturing debug screenshot...")
+        screenshot_path = f"{screenshots_dir}/ui_element_not_found_{timestamp}.png"
+        try:
+            os.makedirs(screenshots_dir, exist_ok=True)
             logger.info(f"Saving debug screenshot to {screenshot_path}")
             self.driver.save_screenshot(screenshot_path)
+            screenshot_size = os.path.getsize(screenshot_path) if os.path.exists(screenshot_path) else 0
+            logger.info(f"Debug screenshot saved: path={screenshot_path} size_bytes={screenshot_size}")
+            # region agent log
+            self._debug_emit(
+                "H11",
+                "web_bot_adapter.py:send_debug_screenshot_message",
+                "Debug screenshot saved",
+                {"step": step, "screenshot_path": screenshot_path, "size_bytes": screenshot_size},
+            )
+            # endregion
         except Exception as e:
             logger.info(f"Error saving screenshot: {e}")
+            # region agent log
+            self._debug_emit(
+                "H11",
+                "web_bot_adapter.py:send_debug_screenshot_message",
+                "Debug screenshot save failed",
+                {"step": step, "error_type": e.__class__.__name__},
+            )
+            # endregion
             screenshot_path = None
 
-        mhtml_file_path = f"/tmp/page_snapshot_{timestamp}.mhtml"
+        mhtml_file_path = f"{screenshots_dir}/page_snapshot_{timestamp}.mhtml"
         try:
             result = self.driver.execute_cdp_cmd("Page.captureSnapshot", {})
             mhtml_bytes = result["data"]  # Extract the data from the response dictionary
@@ -425,6 +623,7 @@ class WebBotAdapter(BotAdapter):
                 "step": step,
                 "current_time": current_time,
                 "mhtml_file_path": mhtml_file_path,
+                "html_file_path": html_file_path,
                 "screenshot_path": screenshot_path,
                 "exception_type": exception.__class__.__name__ if exception else "exception_not_available",
                 "exception_message": exception.__str__() if exception else "exception_message_not_available",
@@ -446,8 +645,10 @@ class WebBotAdapter(BotAdapter):
         options.add_argument("--disable-gpu")
         options.add_argument("--disable-extensions")
         options.add_argument("--disable-application-cache")
-        # options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--no-zygote")
         options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_argument("--disable-features=ExternalProtocolDialog,IntentPicker")
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
 
         if os.getenv("ENABLE_CHROME_SANDBOX", "false").lower() != "true":
@@ -460,6 +661,12 @@ class WebBotAdapter(BotAdapter):
         prefs = {
             "credentials_enable_service": False,
             "profile.password_manager_enabled": False,
+            # Prevent Chrome from showing native external-app launch prompts that block automation.
+            "protocol_handler.excluded_schemes": {
+                "webex": True,
+                "webexteams": True,
+                "wbx": True,
+            },
         }
         options.add_experimental_option("prefs", prefs)
 
@@ -482,6 +689,23 @@ class WebBotAdapter(BotAdapter):
 
         self.driver = webdriver.Chrome(options=options)
         logger.info(f"web driver server initialized at port {self.driver.service.port}")
+        try:
+            webdriver_command_timeout_seconds = float(os.getenv("WEBDRIVER_COMMAND_TIMEOUT_SECONDS", "20"))
+            if hasattr(self.driver.command_executor, "set_timeout"):
+                self.driver.command_executor.set_timeout(webdriver_command_timeout_seconds)
+            elif hasattr(self.driver.command_executor, "_client_config"):
+                self.driver.command_executor._client_config.timeout = webdriver_command_timeout_seconds
+            logger.info(f"Set webdriver command timeout to {webdriver_command_timeout_seconds} seconds")
+            # region agent log
+            self._debug_emit(
+                "H16",
+                "web_bot_adapter.py:init_driver",
+                "Configured webdriver command timeout",
+                {"timeout_seconds": webdriver_command_timeout_seconds},
+            )
+            # endregion
+        except Exception as e:
+            logger.info(f"Could not configure webdriver command timeout: {e}")
 
         initial_data_code = f"window.initialData = {{websocketPort: {self.websocket_port}, videoFrameWidth: {self.video_frame_size[0]}, videoFrameHeight: {self.video_frame_size[1]}, botName: {json.dumps(self.display_name)}, addClickRipple: {'true' if self.should_create_debug_recording else 'false'}, recordingView: '{self.recording_view}', sendMixedAudio: {'true' if self.add_mixed_audio_chunk_callback else 'false'}, sendPerParticipantAudio: {'true' if self.add_audio_chunk_callback else 'false'}, collectCaptions: {'true' if self.upsert_caption_callback else 'false'}}}"
 
@@ -504,15 +728,60 @@ class WebBotAdapter(BotAdapter):
             payload_code = file.read()
 
         # Combine them ensuring libraries load first
+        protocol_blocker_code = """
+            (() => {
+                const allowedProtocols = new Set(["http:", "https:", "about:", "data:", "blob:"]);
+                const isBlockedProtocol = (rawUrl) => {
+                    try {
+                        const resolved = new URL(String(rawUrl), location.href);
+                        return !allowedProtocols.has(resolved.protocol);
+                    } catch (e) {
+                        return false;
+                    }
+                };
+
+                const originalOpen = window.open;
+                window.open = function(url, ...rest) {
+                    if (isBlockedProtocol(url)) return null;
+                    return originalOpen.call(window, url, ...rest);
+                };
+
+                const originalAssign = window.location.assign.bind(window.location);
+                window.location.assign = function(url) {
+                    if (isBlockedProtocol(url)) return;
+                    return originalAssign(url);
+                };
+
+                const originalReplace = window.location.replace.bind(window.location);
+                window.location.replace = function(url) {
+                    if (isBlockedProtocol(url)) return;
+                    return originalReplace(url);
+                };
+
+                document.addEventListener("click", (event) => {
+                    const anchor = event.target && event.target.closest ? event.target.closest("a[href]") : null;
+                    if (!anchor) return;
+                    const href = anchor.getAttribute("href");
+                    if (isBlockedProtocol(href)) {
+                        event.preventDefault();
+                        event.stopPropagation();
+                    }
+                }, true);
+            })();
+        """
         combined_code = f"""
             {initial_data_code}
             {self.subclass_specific_initial_data_code()}
+            {protocol_blocker_code}
             {libraries_code}
             {payload_code}
         """
 
         # Add the combined script to execute on new document
-        self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": combined_code})
+        try:
+            self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": combined_code})
+        except Exception as install_payload_error:
+            logger.info(f"Could not install addScriptToEvaluateOnNewDocument payload: {install_payload_error.__class__.__name__}")
 
     def init(self):
         self.display_var_for_debug_recording = os.environ.get("DISPLAY")
@@ -546,7 +815,12 @@ class WebBotAdapter(BotAdapter):
         # Expected exceptions are ones that we expect to happen and are not a big deal, so we only increment num_retries once every three expected exceptions
         num_expected_exceptions = 0
         num_retries = 0
-        max_retries = 3
+        is_debug_mode = str(os.getenv("DEBUG", "false")).lower() in {"1", "true", "yes", "on"}
+        # "0 retries" means one join attempt with no second attempt.
+        max_retries = 1 if is_debug_mode else 3
+        joined_meeting = False
+        if is_debug_mode:
+            logger.info("DEBUG mode enabled, reducing join retries to 0 (single attempt) for faster iteration")
         while num_retries < max_retries:
             logger.info(f"Trying to join meeting for the {num_retries + 1} time. Max retries is set to: {max_retries}")
             try:
@@ -554,44 +828,64 @@ class WebBotAdapter(BotAdapter):
                 logger.info("Driver initialized. Attempting to join meeting...")
                 self.attempt_to_join_meeting()
                 logger.info("Successfully joined meeting")
+                joined_meeting = True
                 break
 
             except UiLoginRequiredException:
+                self.send_debug_screenshot_message(step="login_required", exception=UiLoginRequiredException("Login required"), inner_exception=None)
                 self.send_login_required_message()
                 self.close_and_quit_driver()
                 return
 
             except UiLoginAttemptFailedException:
+                self.send_debug_screenshot_message(step="login_attempt_failed", exception=UiLoginAttemptFailedException("Login attempt failed"), inner_exception=None)
                 self.send_login_attempt_failed_message()
                 self.close_and_quit_driver()
                 return
 
             except UiRequestToJoinDeniedException:
+                self.send_debug_screenshot_message(step="request_to_join_denied", exception=UiRequestToJoinDeniedException("Request to join denied"), inner_exception=None)
                 self.send_request_to_join_denied_message()
                 self.close_and_quit_driver()
                 return
 
             except UiCouldNotJoinMeetingWaitingRoomTimeoutException:
+                self.send_debug_screenshot_message(
+                    step="waiting_room_timeout",
+                    exception=UiCouldNotJoinMeetingWaitingRoomTimeoutException("Waiting room timeout"),
+                    inner_exception=None,
+                )
                 self.send_message_callback({"message": self.Messages.LEAVE_MEETING_WAITING_ROOM_TIMEOUT_EXCEEDED})
                 self.close_and_quit_driver()
                 return
 
             except UiCouldNotJoinMeetingWaitingForHostException:
+                self.send_debug_screenshot_message(
+                    step="waiting_for_host_timeout",
+                    exception=UiCouldNotJoinMeetingWaitingForHostException("Waiting for host timeout"),
+                    inner_exception=None,
+                )
                 self.send_message_callback({"message": self.Messages.LEAVE_MEETING_WAITING_FOR_HOST})
                 self.close_and_quit_driver()
                 return
 
             except UiMeetingNotFoundException:
+                self.send_debug_screenshot_message(step="meeting_not_found", exception=UiMeetingNotFoundException("Meeting not found"), inner_exception=None)
                 self.send_meeting_not_found_message()
                 self.close_and_quit_driver()
                 return
 
             except UiIncorrectPasswordException:
+                self.send_debug_screenshot_message(step="incorrect_password", exception=UiIncorrectPasswordException("Incorrect password"), inner_exception=None)
                 self.send_incorrect_password_message()
                 self.close_and_quit_driver()
                 return
 
             except UiRetryableExpectedException as e:
+                self._mark_driver_unhealthy_if_needed(e, e.inner_exception)
+                self._stop_debug_screen_recorder_if_running(reason=f"retryable_expected_exception_{e.__class__.__name__}")
+                # Capture a screenshot for each expected retryable failure to aid UI debugging.
+                self.send_debug_screenshot_message(step=e.step, exception=e, inner_exception=e.inner_exception)
                 if num_retries >= max_retries:
                     logger.info(f"Failed to join meeting and the {e.__class__.__name__} exception is retryable but the number of retries exceeded the limit and there were {num_expected_exceptions} expected exceptions, so returning")
                     self.send_debug_screenshot_message(step=e.step, exception=e, inner_exception=e.inner_exception)
@@ -610,6 +904,25 @@ class WebBotAdapter(BotAdapter):
                     logger.info(f"Failed to join meeting and the {e.__class__.__name__} exception is expected so not incrementing num_retries, but {num_expected_exceptions} expected exceptions have occurred")
 
             except UiRetryableException as e:
+                self._mark_driver_unhealthy_if_needed(e, e.inner_exception)
+                self._stop_debug_screen_recorder_if_running(reason=f"retryable_exception_{e.__class__.__name__}")
+                # Capture a screenshot for each retryable failure to aid UI debugging.
+                self.send_debug_screenshot_message(step=e.step, exception=e, inner_exception=e.inner_exception)
+                # region agent log
+                self._debug_emit(
+                    "H4",
+                    "web_bot_adapter.py:repeatedly_attempt_to_join_meeting",
+                    "Retryable join exception",
+                    {
+                        "exception_type": e.__class__.__name__,
+                        "step": e.step,
+                        "inner_exception_type": e.inner_exception.__class__.__name__ if e.inner_exception else None,
+                        "current_url_hint": self.meeting_url.split("?")[0] if self.meeting_url else None,
+                        "max_retries": max_retries,
+                        "num_retries": num_retries,
+                    },
+                )
+                # endregion
                 if num_retries >= max_retries:
                     logger.info(f"Failed to join meeting and the {e.__class__.__name__} exception is retryable but the number of retries exceeded the limit, so returning")
                     self.send_debug_screenshot_message(step=e.step, exception=e, inner_exception=e.inner_exception)
@@ -626,6 +939,8 @@ class WebBotAdapter(BotAdapter):
                 num_retries += 1
 
             except Exception as e:
+                self._mark_driver_unhealthy_if_needed(e, None)
+                self._stop_debug_screen_recorder_if_running(reason=f"unexpected_exception_{e.__class__.__name__}")
                 if num_retries >= max_retries:
                     logger.exception(f"Failed to join meeting and the unexpected {e.__class__.__name__} exception with message {e.__str__()} is retryable but the number of retries exceeded the limit, so returning.")
                     self.send_debug_screenshot_message(step="unknown", exception=e, inner_exception=None)
@@ -643,6 +958,10 @@ class WebBotAdapter(BotAdapter):
                 num_retries += 1
 
             sleep(1)
+
+        if not joined_meeting:
+            logger.info("Failed to join meeting after exhausting retries")
+            return
 
         self.after_bot_joined_meeting()
         self.subclass_specific_after_bot_joined_meeting()
@@ -688,6 +1007,13 @@ class WebBotAdapter(BotAdapter):
             return
         if self.stop_recording_screen_callback:
             self.stop_recording_screen_callback()
+        self._stop_debug_screen_recorder_if_running(reason="leave_start")
+
+        if self.driver_unhealthy or self.driver is None:
+            logger.info("Skipping webdriver leave operations because driver is unhealthy/unavailable")
+            self.send_message_callback({"message": self.Messages.MEETING_ENDED})
+            self.left_meeting = True
+            return
 
         try:
             logger.info("disable media sending")
@@ -708,6 +1034,10 @@ class WebBotAdapter(BotAdapter):
 
     def close_and_quit_driver(self):
         logger.info("Closing window...")
+        if self.driver_unhealthy or self.driver is None:
+            logger.info("Skipping close/quit because driver is unhealthy/unavailable")
+            self.driver = None
+            return
         if self.driver:
             # Simulate closing browser window
             try:
@@ -725,6 +1055,12 @@ class WebBotAdapter(BotAdapter):
     def cleanup(self):
         if self.stop_recording_screen_callback:
             self.stop_recording_screen_callback()
+        self._stop_debug_screen_recorder_if_running(reason="cleanup_start")
+
+        if self.driver_unhealthy or self.driver is None:
+            logger.info("Skipping webdriver cleanup operations because driver is unhealthy/unavailable")
+            self.cleaned_up = True
+            return
 
         try:
             logger.info("disable media sending")
@@ -744,8 +1080,7 @@ class WebBotAdapter(BotAdapter):
         except Exception as e:
             logger.info(f"Error during cleanup: {e}")
 
-        if self.debug_screen_recorder:
-            self.debug_screen_recorder.stop()
+        self._stop_debug_screen_recorder_if_running(reason="cleanup_after_driver")
 
         # Properly shutdown the websocket server
         if self.websocket_server:

@@ -1314,9 +1314,12 @@ class BotController:
             debug_screenshot = BotDebugScreenshot.objects.create(bot_event=last_bot_event)
 
             # Save the file directly from the file path
-            with open(BotAdapter.DEBUG_RECORDING_FILE_PATH, "rb") as f:
-                debug_screenshot.file.save(f"debug_screen_recording_{debug_screenshot.object_id}.mp4", f, save=True)
-            logger.info(f"Saved debug recording with ID {debug_screenshot.object_id}")
+            try:
+                with open(BotAdapter.DEBUG_RECORDING_FILE_PATH, "rb") as f:
+                    debug_screenshot.file.save(f"debug_screen_recording_{debug_screenshot.object_id}.mp4", f, save=True)
+                logger.info(f"Saved debug recording with ID {debug_screenshot.object_id}")
+            except Exception as e:
+                logger.info(f"Could not persist debug recording artifact: {e}")
         else:
             logger.info("No bot event found, cannot save debug recording")
 
