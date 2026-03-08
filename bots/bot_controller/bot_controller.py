@@ -1311,15 +1311,16 @@ class BotController:
         # Find the bot's last event
         last_bot_event = self.bot_in_db.last_bot_event()
         if last_bot_event:
-            debug_screenshot = BotDebugScreenshot.objects.create(bot_event=last_bot_event)
-
-            # Save the file directly from the file path
             try:
+                debug_screenshot = BotDebugScreenshot.objects.create(bot_event=last_bot_event)
+
+                # Save the file directly from the file path.
+                # Debug artifact upload failures should never block bot finalization.
                 with open(BotAdapter.DEBUG_RECORDING_FILE_PATH, "rb") as f:
                     debug_screenshot.file.save(f"debug_screen_recording_{debug_screenshot.object_id}.mp4", f, save=True)
                 logger.info(f"Saved debug recording with ID {debug_screenshot.object_id}")
             except Exception as e:
-                logger.info(f"Could not persist debug recording artifact: {e}")
+                logger.error(f"Failed to save debug recording for bot {self.bot_in_db.object_id}: {e}")
         else:
             logger.info("No bot event found, cannot save debug recording")
 
