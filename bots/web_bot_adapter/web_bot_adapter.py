@@ -28,6 +28,16 @@ class WebBotAdapter(BotAdapter):
     DEBUG_TRACE_LOG_PATH = "/Users/vanyabrucker/src/transcript-meeting-recorder/.cursor/debug-2a4d04.log"
     DEBUG_TRACE_LOG_PATH_CONTAINER = "/attendee/.cursor/debug-2a4d04.log"
     DEBUG_TRACE_SESSION_ID = "2a4d04"
+    EXTERNAL_PROTOCOL_SCHEMES = (
+        "webex",
+        "webexteams",
+        "wbx",
+        "cisco-spark",
+        "ciscospark",
+        "spark",
+        "wbxmtg",
+        "webexmtg",
+    )
 
     def __init__(
         self,
@@ -632,6 +642,82 @@ class WebBotAdapter(BotAdapter):
             }
         )
 
+    def external_protocol_schemes_to_block(self):
+        override = os.getenv("EXTERNAL_PROTOCOL_SCHEME_BLOCKLIST")
+        raw_schemes = override if override else ",".join(self.EXTERNAL_PROTOCOL_SCHEMES)
+        extras = os.getenv("EXTERNAL_PROTOCOL_SCHEME_BLOCKLIST_EXTRA", "")
+        if extras:
+            raw_schemes = f"{raw_schemes},{extras}"
+
+        normalized = []
+        for raw in raw_schemes.split(","):
+            value = raw.strip().lower()
+            if not value:
+                continue
+            if "://" in value:
+                value = value.split("://", 1)[0]
+            value = value.rstrip(":")
+            if value and value not in normalized:
+                normalized.append(value)
+        return tuple(normalized)
+
+    def external_protocol_url_blocklist_patterns(self):
+        patterns = []
+        for scheme in self.external_protocol_schemes_to_block():
+            pattern = f"{scheme}://*"
+            if pattern not in patterns:
+                patterns.append(pattern)
+
+        extra_patterns = os.getenv("EXTERNAL_PROTOCOL_URL_BLOCKLIST_PATTERNS", "")
+        for raw in extra_patterns.split(","):
+            value = raw.strip()
+            if value and value not in patterns:
+                patterns.append(value)
+        return patterns
+
+    def _chrome_managed_policy_directories(self):
+        configured = os.getenv("CHROME_MANAGED_POLICY_DIRECTORIES")
+        if configured:
+            parsed = [path.strip() for path in configured.split(",") if path.strip()]
+            if parsed:
+                return parsed
+        return [
+            "/etc/opt/chrome/policies/managed",
+            "/etc/chromium/policies/managed",
+            "/etc/chromium-browser/policies/managed",
+        ]
+
+    def install_external_protocol_blocklist_policies(self, options):
+        if os.getenv("DISABLE_CHROME_POLICY_URL_BLOCKLIST", "false").lower() == "true":
+            logger.info("Skipping managed URLBlocklist setup because DISABLE_CHROME_POLICY_URL_BLOCKLIST=true")
+            return
+
+        policy_payload = {"URLBlocklist": self.external_protocol_url_blocklist_patterns()}
+        installed_paths = []
+        for policy_dir in self._chrome_managed_policy_directories():
+            try:
+                os.makedirs(policy_dir, exist_ok=True)
+                policy_path = os.path.join(policy_dir, "external_protocol_blocklist.json")
+                with open(policy_path, "w", encoding="utf-8") as policy_file:
+                    json.dump(policy_payload, policy_file, sort_keys=True)
+                installed_paths.append(policy_path)
+            except Exception as e:
+                logger.info(f"Could not write managed policy in {policy_dir}: {e.__class__.__name__}")
+
+        policy_test_file = os.getenv("CHROME_ENTERPRISE_POLICY_TEST_FILE", "/tmp/chrome-enterprise-policies.json")
+        try:
+            with open(policy_test_file, "w", encoding="utf-8") as policy_file:
+                json.dump(policy_payload, policy_file, sort_keys=True)
+            options.add_argument(f"--enterprise-policy-test-file={policy_test_file}")
+            installed_paths.append(policy_test_file)
+        except Exception as e:
+            logger.info(f"Could not write enterprise policy test file {policy_test_file}: {e.__class__.__name__}")
+
+        if installed_paths:
+            logger.info(f"Configured Chrome URLBlocklist policy paths: {installed_paths}")
+        else:
+            logger.info("Could not configure any Chrome URLBlocklist policy paths")
+
     def init_driver(self):
         logger.info("Initializing web driver...")
         options = webdriver.ChromeOptions()
@@ -651,6 +737,8 @@ class WebBotAdapter(BotAdapter):
         options.add_argument("--disable-features=ExternalProtocolDialog,IntentPicker")
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
 
+        self.install_external_protocol_blocklist_policies(options)
+
         if os.getenv("ENABLE_CHROME_SANDBOX", "false").lower() != "true":
             options.add_argument("--no-sandbox")
             options.add_argument("--disable-setuid-sandbox")
@@ -658,20 +746,12 @@ class WebBotAdapter(BotAdapter):
         else:
             logger.info("Chrome sandboxing is enabled")
 
+        excluded_protocol_schemes = {scheme: True for scheme in self.external_protocol_schemes_to_block()}
         prefs = {
             "credentials_enable_service": False,
             "profile.password_manager_enabled": False,
             # Prevent Chrome from showing native external-app launch prompts that block automation.
-            "protocol_handler.excluded_schemes": {
-                "webex": True,
-                "webexteams": True,
-                "wbx": True,
-                "cisco-spark": True,
-                "ciscospark": True,
-                "spark": True,
-                "wbxmtg": True,
-                "webexmtg": True,
-            },
+            "protocol_handler.excluded_schemes": excluded_protocol_schemes,
         }
         options.add_experimental_option("prefs", prefs)
 
