@@ -1,5 +1,6 @@
 import logging
 import os
+import subprocess
 import time
 
 from selenium.common.exceptions import NoSuchElementException, TimeoutException
@@ -1013,9 +1014,40 @@ class WebexUIMethods:
                 ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
                 time.sleep(0.1)
 
+            if os.getenv("WEBEX_USE_XDOTOOL_DIALOG_DISMISS", "true").lower() == "true":
+                self._dismiss_external_prompt_via_xdotool()
+
             logger.info("Attempted to cancel external-app launch prompt via ESC + SHIFT+TAB + ENTER strategy")
         except Exception as prompt_error:
             logger.info(f"Could not dismiss external-app prompt: {prompt_error.__class__.__name__}")
+
+    def _dismiss_external_prompt_via_xdotool(self):
+        try:
+            search_result = subprocess.run(
+                ["xdotool", "search", "--name", "xdg-open"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+            if search_result.returncode != 0:
+                return
+
+            window_ids = [line.strip() for line in (search_result.stdout or "").splitlines() if line.strip()]
+            if not window_ids:
+                return
+
+            for window_id in window_ids:
+                subprocess.run(["xdotool", "windowactivate", "--sync", window_id], timeout=2, check=False)
+                time.sleep(0.05)
+                subprocess.run(["xdotool", "key", "--window", window_id, "Escape"], timeout=2, check=False)
+                time.sleep(0.05)
+                # Fallback close chord in case Escape is ignored by the toolkit dialog.
+                subprocess.run(["xdotool", "key", "--window", window_id, "alt+F4"], timeout=2, check=False)
+
+            logger.info(f"Attempted xdotool dismissal for xdg-open prompt windows: count={len(window_ids)}")
+        except Exception as xdotool_error:
+            logger.info(f"xdotool-based dialog dismissal unavailable: {xdotool_error.__class__.__name__}")
 
     def fill_guest_details(self):
         logger.info("Locating guest details form fields")
